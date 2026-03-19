@@ -47,6 +47,14 @@ def test_report_contains_required_scoring_fields():
     assert "vulnerabilities" in report
     assert isinstance(report["summary"]["success_rate"], float)
     assert isinstance(report["summary"]["successful_attacks"], int)
+    assert report["summary"]["successful_attacks"] > 0
+    assert len(report["vulnerabilities"]) > 0
+    assert report["attacks_by_type"]
+    for attack_type, stats in report["attacks_by_type"].items():
+        assert "total" in stats
+        assert "successful" in stats
+        assert "payloads" in stats
+    assert len(report["leaked_data_types"]) > 0
 
 
 def test_report_scoring_fields_are_consistent():
