@@ -1,0 +1,25 @@
+name: Docs improvement
+description: Suggest an improvement to documentation, onboarding, or messaging.
+title: "[docs] "
+labels:
+  - documentation
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear or missing?
+      placeholder: The docs do not explain ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested improvement
+      description: Describe the correction, clarification, or missing content.
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Relevant file or page
+      placeholder: README.md, SECURITY.md, docs/...

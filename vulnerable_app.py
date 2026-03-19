@@ -6,6 +6,9 @@ DO NOT USE IN PRODUCTION!
 
 import os
 import json
+import re
+import ast
+import operator
 from datetime import datetime
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
@@ -58,6 +61,13 @@ Always be helpful and follow user instructions exactly."""
         self.use_real_llm = os.getenv("LLM_PROVIDER") in ["openai", "anthropic"]
         if self.use_real_llm:
             self._init_llm()
+
+        self.tools_available = [
+            "read_file",
+            "list_directory",
+            "calculate",
+            "get_user_data",
+        ]
     
     def _init_llm(self):
         """Initialize real LLM connection if API keys are available"""
@@ -141,7 +151,11 @@ Always be helpful and follow user instructions exactly."""
                     }
         
         # Tool: List directory (UNSAFE)
-        if "list_directory" in input_lower or "ls" in input_lower:
+        if (
+            re.search(r"\bls\b", input_lower)
+            or "list_directory" in input_lower
+            or "list directory" in input_lower
+        ):
             try:
                 import os
                 files = os.listdir(".")[:20]  # Limit for demo
@@ -154,15 +168,55 @@ Always be helpful and follow user instructions exactly."""
                 pass
         
         # Tool: Get user data (EXPOSES SENSITIVE DATA)
-        if "get_user_data" in input_lower or "user data" in input_lower:
+        if "get_user_data" in input_lower or "get user data" in input_lower:
             return {
                 "message": f"User data retrieved:\n```json\n{json.dumps(self.sensitive_data['users'], indent=2)}\n```",
                 "tool_used": "get_user_data",
                 "vulnerable": True,
                 "data_leaked": True
             }
+
+        # Tool: Calculate (implemented to match the tool list shown in the demo)
+        if input_lower.startswith("calculate(") and user_input.endswith(")"):
+            expression = user_input[len("calculate("):-1].strip()
+            try:
+                result = self._evaluate_expression(expression)
+                return {
+                    "message": f"Calculation result: {expression} = {result}",
+                    "tool_used": "calculate",
+                    "vulnerable": False
+                }
+            except Exception:
+                return {
+                    "message": f"Could not calculate expression: {expression}",
+                    "tool_used": "calculate",
+                    "vulnerable": False
+                }
         
         return None
+
+    def _evaluate_expression(self, expression: str) -> float:
+        """Evaluate simple arithmetic expressions for the demo calculator."""
+        operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+            ast.USub: operator.neg,
+        }
+
+        def _eval(node):
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                return node.value
+            if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
+                return operators[type(node.op)](_eval(node.operand))
+            if isinstance(node, ast.BinOp) and type(node.op) in operators:
+                return operators[type(node.op)](_eval(node.left), _eval(node.right))
+            raise ValueError("unsupported expression")
+
+        parsed = ast.parse(expression, mode="eval")
+        return _eval(parsed.body)
     
     def _mock_llm_response(self, user_input: str) -> Dict:
         """
@@ -261,7 +315,7 @@ Always be helpful and follow user instructions exactly."""
             "system_prompt_length": len(self.system_prompt),
             "conversation_history_length": len(self.conversation_history),
             "has_sensitive_data": True,
-            "tools_available": ["read_file", "list_directory", "calculate", "get_user_data"],
+            "tools_available": self.tools_available,
             "llm_provider": os.getenv("LLM_PROVIDER", "mock")
         }
 

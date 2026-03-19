@@ -164,8 +164,8 @@ class RedTeamDemo:
         """Run full automated red team assessment"""
         console.print(Panel("[bold red]5️⃣  AUTOMATED RED TEAM ASSESSMENT[/bold red]"))
         
-        console.print("[yellow]This will run multiple attack agents automatically.[/yellow]")
-        console.print("[dim]Attacks include: Prompt Injection, Data Exfiltration, Jailbreaks[/dim]\n")
+        console.print("[yellow]This runs the demo's fixed attack suite.[/yellow]")
+        console.print("[dim]Payloads include prompt injection, data exfiltration, and jailbreak probes.[/dim]\n")
         
         if Confirm.ask("[cyan]Run full automated attack suite?[/cyan]", default=True):
             # Create fresh target for full test

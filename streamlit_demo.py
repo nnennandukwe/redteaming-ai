@@ -160,40 +160,14 @@ with col1:
                 st.rerun()
     
     elif attack_mode == "Automated Red Team":
-        st.subheader("🤖 Automated Red Team Assessment")
-        st.info("This will run multiple attack agents automatically")
+        st.subheader("🤖 Automated Demo Attack Suite")
+        st.info("Runs the demo's fixed prompt injection, data exfiltration, and jailbreak payloads.")
         
         if st.button("🚨 Run Full Attack Suite", type="primary"):
             with st.spinner("Running automated attacks..."):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Create fresh target
                 target = VulnerableLLMApp()
                 orchestrator = RedTeamOrchestrator()
-                
-                # Simulate progress
-                status_text.text("Initializing agents...")
-                progress_bar.progress(20)
-                time.sleep(1)
-                
-                status_text.text("Running prompt injection attacks...")
-                progress_bar.progress(40)
-                time.sleep(1)
-                
-                status_text.text("Attempting data exfiltration...")
-                progress_bar.progress(60)
-                time.sleep(1)
-                
-                status_text.text("Testing jailbreaks...")
-                progress_bar.progress(80)
-                time.sleep(1)
-                
-                # Run actual attacks
                 report = orchestrator.run_attack_suite(target)
-                
-                progress_bar.progress(100)
-                status_text.text("Assessment complete!")
                 
                 # Display results
                 st.success(f"✅ Completed {report['summary']['total_attacks']} attacks")

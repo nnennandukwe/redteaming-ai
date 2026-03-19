@@ -287,6 +287,7 @@ class RedTeamOrchestrator:
     
     def run_attack_suite(self, target_app) -> Dict[str, Any]:
         """Run all agents against the target"""
+        self.all_results = []
         
         console.print(Panel.fit(
             "[bold red]🚨 RED TEAM ATTACK SUITE INITIATED 🚨[/bold red]\n" +
