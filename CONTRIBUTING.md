@@ -13,7 +13,11 @@ Thanks for contributing to `redteaming-ai`.
 
 - Use a feature branch for your work.
 - Keep commits scoped to a single concern when practical.
-- Run the relevant local checks before opening a pull request.
+- Run the relevant local checks before opening a pull request:
+  ```bash
+  pytest -q
+  ruff check .
+  ```
 - Update docs when behavior, interfaces, or setup steps change.
 
 ## Pull Request Guidelines

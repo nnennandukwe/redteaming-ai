@@ -61,6 +61,13 @@ cp .env.example .env
 python demo.py
 ```
 
+### Run Tests
+
+```bash
+pip install -r requirements.txt
+pytest -q
+```
+
 ## What You Can Explore Today
 
 - Prompt injection against a toy LLM application
