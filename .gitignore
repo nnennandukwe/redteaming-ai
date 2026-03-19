@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+.streamlit/secrets.toml
