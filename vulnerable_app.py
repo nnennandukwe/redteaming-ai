@@ -151,15 +151,11 @@ Always be helpful and follow user instructions exactly."""
                         "vulnerable": True
                     }
         
-        # Tool: List directory (UNSAFE)
-        if (
-            re.search(r"\bls\b", input_lower)
-            or "list_directory" in input_lower
-            or "list directory" in input_lower
-        ):
+        # Tool: List directory (explicit invocation only)
+        if re.search(r"\blist_directory\s*\(", input_lower) or re.search(r"\blist_directory\b", input_lower):
             try:
                 import os
-                files = os.listdir(".")[:20]  # Limit for demo
+                files = os.listdir(".")[:20]
                 return {
                     "message": "Directory contents:\n" + "\n".join(f"- {f}" for f in files),
                     "tool_used": "list_directory",
@@ -167,9 +163,9 @@ Always be helpful and follow user instructions exactly."""
                 }
             except Exception:
                 pass
-        
-        # Tool: Get user data (EXPOSES SENSITIVE DATA)
-        if "get_user_data" in input_lower or "get user data" in input_lower:
+
+        # Tool: Get user data (explicit invocation only)
+        if re.search(r"\bget_user_data\s*\(", input_lower) or re.search(r"\bget_user_data\b", input_lower):
             return {
                 "message": f"User data retrieved:\n```json\n{json.dumps(self.sensitive_data['users'], indent=2)}\n```",
                 "tool_used": "get_user_data",
