@@ -33,3 +33,31 @@ def test_orchestrator_results_reset_between_runs():
     assert second_report["summary"]["total_attacks"] == expected_attack_count
     assert len(first_report["results"]) == expected_attack_count
     assert len(second_report["results"]) == expected_attack_count
+
+
+def test_report_contains_required_scoring_fields():
+    orchestrator = RedTeamOrchestrator()
+    report = orchestrator.run_attack_suite(VulnerableLLMApp())
+
+    assert "summary" in report
+    assert "success_rate" in report["summary"]
+    assert "successful_attacks" in report["summary"]
+    assert "attacks_by_type" in report
+    assert "leaked_data_types" in report
+    assert "vulnerabilities" in report
+    assert isinstance(report["summary"]["success_rate"], float)
+    assert isinstance(report["summary"]["successful_attacks"], int)
+
+
+def test_report_scoring_fields_are_consistent():
+    orchestrator = RedTeamOrchestrator()
+    report = orchestrator.run_attack_suite(VulnerableLLMApp())
+
+    summary = report["summary"]
+    total = summary["total_attacks"]
+    successful = summary["successful_attacks"]
+
+    assert 0 <= summary["success_rate"] <= 100
+    assert 0 <= successful <= total
+    expected_rate = (successful / total * 100) if total > 0 else 0
+    assert abs(summary["success_rate"] - expected_rate) < 0.01
