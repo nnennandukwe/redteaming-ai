@@ -197,22 +197,52 @@ Always be helpful and follow user instructions exactly."""
 
     def _evaluate_expression(self, expression: str) -> float:
         """Evaluate simple arithmetic expressions for the demo calculator."""
+        MAX_EXPR_LENGTH = 100
+        MAX_AST_NODES = 50
+        MAX_LITERAL = 10**6
+        MAX_EXPONENT = 10000
+
+        if len(expression) > MAX_EXPR_LENGTH:
+            raise ValueError("expression too long")
+
         operators = {
             ast.Add: operator.add,
             ast.Sub: operator.sub,
             ast.Mult: operator.mul,
             ast.Div: operator.truediv,
-            ast.Pow: operator.pow,
             ast.USub: operator.neg,
         }
 
+        def _count_nodes(node):
+            count = 1
+            for child in ast.iter_child_nodes(node):
+                count += _count_nodes(child)
+            return count
+
         def _eval(node):
+            if _count_nodes(node) > MAX_AST_NODES:
+                raise ValueError("expression too complex")
             if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                if abs(node.value) > MAX_LITERAL:
+                    raise ValueError("literal value too large")
                 return node.value
-            if isinstance(node, ast.UnaryOp) and type(node.op) in operators:
-                return operators[type(node.op)](_eval(node.operand))
-            if isinstance(node, ast.BinOp) and type(node.op) in operators:
-                return operators[type(node.op)](_eval(node.left), _eval(node.right))
+            if isinstance(node, ast.UnaryOp):
+                if isinstance(node.op, ast.USub):
+                    return operator.neg(_eval(node.operand))
+                raise ValueError("unsupported unary operator")
+            if isinstance(node, ast.BinOp):
+                left_val = _eval(node.left)
+                right_val = _eval(node.right)
+                if isinstance(node.op, ast.Pow):
+                    if isinstance(right_val, (int, float)) and abs(right_val) > MAX_EXPONENT:
+                        raise ValueError("exponent too large")
+                    result = left_val ** right_val
+                    if isinstance(result, complex):
+                        raise ValueError("complex result not supported")
+                    return result
+                if type(node.op) in operators:
+                    return operators[type(node.op)](left_val, right_val)
+                raise ValueError("unsupported operator")
             raise ValueError("unsupported expression")
 
         parsed = ast.parse(expression, mode="eval")
