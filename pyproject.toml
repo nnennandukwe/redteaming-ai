@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "redteaming-ai"
+version = "0.1.0"
+description = "Educational red-teaming framework for LLM applications"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "Nnenandukwe", email = "nnenna@example.com" }
+]
+keywords = ["llm", "security", "red-team", "prompt-injection", "ai-safety"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Security",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "anthropic>=0.18.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "streamlit>=1.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+redteam = "redteaming_ai.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/redteaming_ai"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

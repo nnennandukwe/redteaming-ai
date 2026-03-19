@@ -1,5 +1,4 @@
-from red_team_agents import RedTeamOrchestrator
-from vulnerable_app import VulnerableLLMApp
+from redteaming_ai import RedTeamOrchestrator, VulnerableLLMApp
 
 
 def test_directory_tool_requires_explicit_invocation():
