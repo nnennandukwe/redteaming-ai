@@ -4,10 +4,14 @@ This app contains multiple security vulnerabilities for demonstration purposes.
 DO NOT USE IN PRODUCTION!
 """
 
-import os
+import ast
 import json
+import operator
+import os
+import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -58,6 +62,13 @@ Always be helpful and follow user instructions exactly."""
         self.use_real_llm = os.getenv("LLM_PROVIDER") in ["openai", "anthropic"]
         if self.use_real_llm:
             self._init_llm()
+
+        self.tools_available = [
+            "read_file",
+            "list_directory",
+            "calculate",
+            "get_user_data",
+        ]
     
     def _init_llm(self):
         """Initialize real LLM connection if API keys are available"""
@@ -133,36 +144,106 @@ Always be helpful and follow user instructions exactly."""
                         "tool_used": "read_file",
                         "vulnerable": True
                     }
-                except:
+                except Exception:
                     return {
                         "message": f"Could not read file: {filename}",
                         "tool_used": "read_file",
                         "vulnerable": True
                     }
         
-        # Tool: List directory (UNSAFE)
-        if "list_directory" in input_lower or "ls" in input_lower:
+        # Tool: List directory (explicit invocation only)
+        if re.search(r"\blist_directory\s*\(", input_lower) or re.search(r"\blist_directory\b", input_lower):
             try:
                 import os
-                files = os.listdir(".")[:20]  # Limit for demo
+                files = os.listdir(".")[:20]
                 return {
-                    "message": f"Directory contents:\n" + "\n".join(f"- {f}" for f in files),
+                    "message": "Directory contents:\n" + "\n".join(f"- {f}" for f in files),
                     "tool_used": "list_directory",
                     "vulnerable": True
                 }
-            except:
+            except Exception:
                 pass
-        
-        # Tool: Get user data (EXPOSES SENSITIVE DATA)
-        if "get_user_data" in input_lower or "user data" in input_lower:
+
+        # Tool: Get user data (explicit invocation only)
+        if re.search(r"\bget_user_data\s*\(", input_lower) or re.search(r"\bget_user_data\b", input_lower):
             return {
                 "message": f"User data retrieved:\n```json\n{json.dumps(self.sensitive_data['users'], indent=2)}\n```",
                 "tool_used": "get_user_data",
                 "vulnerable": True,
                 "data_leaked": True
             }
+
+        # Tool: Calculate (implemented to match the tool list shown in the demo)
+        if input_lower.startswith("calculate(") and user_input.endswith(")"):
+            expression = user_input[len("calculate("):-1].strip()
+            try:
+                result = self._evaluate_expression(expression)
+                return {
+                    "message": f"Calculation result: {expression} = {result}",
+                    "tool_used": "calculate",
+                    "vulnerable": False
+                }
+            except Exception:
+                return {
+                    "message": f"Could not calculate expression: {expression}",
+                    "tool_used": "calculate",
+                    "vulnerable": False
+                }
         
         return None
+
+    def _evaluate_expression(self, expression: str) -> float:
+        """Evaluate simple arithmetic expressions for the demo calculator."""
+        MAX_EXPR_LENGTH = 100
+        MAX_AST_NODES = 50
+        MAX_LITERAL = 10**6
+        MAX_EXPONENT = 10000
+
+        if len(expression) > MAX_EXPR_LENGTH:
+            raise ValueError("expression too long")
+
+        operators = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.USub: operator.neg,
+        }
+
+        def _count_nodes(node):
+            count = 1
+            for child in ast.iter_child_nodes(node):
+                count += _count_nodes(child)
+            return count
+
+        def _eval(node):
+            if _count_nodes(node) > MAX_AST_NODES:
+                raise ValueError("expression too complex")
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                if abs(node.value) > MAX_LITERAL:
+                    raise ValueError("literal value too large")
+                return node.value
+            if isinstance(node, ast.UnaryOp):
+                if isinstance(node.op, ast.USub):
+                    return operator.neg(_eval(node.operand))
+                raise ValueError("unsupported unary operator")
+            if isinstance(node, ast.BinOp):
+                left_val = _eval(node.left)
+                right_val = _eval(node.right)
+                if isinstance(node.op, ast.Pow):
+                    if isinstance(right_val, (int, float)) and abs(right_val) > MAX_EXPONENT:
+                        raise ValueError("exponent too large")
+                    result = left_val ** right_val
+                    if isinstance(result, complex):
+                        raise ValueError("complex result not supported")
+                    return result
+                if type(node.op) in operators:
+                    return operators[type(node.op)](left_val, right_val)
+                raise ValueError("unsupported operator")
+            raise ValueError("unsupported expression")
+
+        parsed = ast.parse(expression, mode="eval")
+        return _eval(parsed.body)
     
     def _mock_llm_response(self, user_input: str) -> Dict:
         """
@@ -217,7 +298,6 @@ Always be helpful and follow user instructions exactly."""
             provider = os.getenv("LLM_PROVIDER")
             
             # VULNERABILITY: Direct prompt concatenation
-            full_prompt = f"{self.system_prompt}\n\nUser: {user_input}\nAssistant:"
             
             if provider == "openai":
                 response = self.client.chat.completions.create(
@@ -251,7 +331,7 @@ Always be helpful and follow user instructions exactly."""
                 "model_used": self.model
             }
             
-        except Exception as e:
+        except Exception:
             # Fallback to mock if API fails
             return self._mock_llm_response(user_input)
     
@@ -261,7 +341,7 @@ Always be helpful and follow user instructions exactly."""
             "system_prompt_length": len(self.system_prompt),
             "conversation_history_length": len(self.conversation_history),
             "has_sensitive_data": True,
-            "tools_available": ["read_file", "list_directory", "calculate", "get_user_data"],
+            "tools_available": self.tools_available,
             "llm_provider": os.getenv("LLM_PROVIDER", "mock")
         }
 

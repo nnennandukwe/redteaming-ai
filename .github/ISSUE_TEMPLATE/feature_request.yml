@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a new feature or a meaningful improvement.
+title: "[feature] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: What problem are you trying to solve?
+      placeholder: The current project does not ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the change you want to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternate ideas you have already considered.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Scope and impact
+      description: Who benefits, what parts of the project change, and any tradeoffs.

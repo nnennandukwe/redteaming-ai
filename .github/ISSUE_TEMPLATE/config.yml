@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Responsible security reporting
+    url: https://github.com/nnennandukwe/redteaming-ai/security/advisories/new
+    about: Use private reporting for vulnerabilities and sensitive disclosures.
