@@ -2,9 +2,6 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
-      - "epic/**"
   pull_request:
 
 jobs:
