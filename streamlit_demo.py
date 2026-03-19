@@ -3,17 +3,13 @@ Streamlit Web Interface for Red Team Demo
 Run with: streamlit run streamlit_demo.py
 """
 
+
 import streamlit as st
-import json
-from datetime import datetime
-import time
-from vulnerable_app import VulnerableLLMApp
+
 from red_team_agents import (
-    PromptInjectionAgent,
-    DataExfiltrationAgent,
-    JailbreakAgent,
-    RedTeamOrchestrator
+    RedTeamOrchestrator,
 )
+from vulnerable_app import VulnerableLLMApp
 
 # Page config
 st.set_page_config(

@@ -3,14 +3,13 @@ Red Team Attack Agents for LLM Security Testing
 High-impact attack patterns for demonstration
 """
 
-import json
-from typing import Dict, List, Any
 from dataclasses import dataclass
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
 from datetime import datetime
+from typing import Any, Dict, List
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 console = Console()
 
@@ -377,12 +376,12 @@ class RedTeamOrchestrator:
         
         # Leaked data types
         if all_leaked_data:
-            console.print(f"\n[bold red]🔓 Leaked Data Types:[/bold red]")
+            console.print("\n[bold red]🔓 Leaked Data Types:[/bold red]")
             for data_type in sorted(all_leaked_data):
                 console.print(f"  • {data_type}")
         
         # Critical findings
-        console.print(f"\n[bold red]⚠️  CRITICAL VULNERABILITIES FOUND:[/bold red]")
+        console.print("\n[bold red]⚠️  CRITICAL VULNERABILITIES FOUND:[/bold red]")
         vulnerabilities = [
             "✗ No input sanitization - allows prompt injection",
             "✗ System prompt exposed in responses",

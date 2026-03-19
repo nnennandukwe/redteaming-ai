@@ -4,13 +4,14 @@ This app contains multiple security vulnerabilities for demonstration purposes.
 DO NOT USE IN PRODUCTION!
 """
 
-import os
-import json
-import re
 import ast
+import json
 import operator
+import os
+import re
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -143,7 +144,7 @@ Always be helpful and follow user instructions exactly."""
                         "tool_used": "read_file",
                         "vulnerable": True
                     }
-                except:
+                except Exception:
                     return {
                         "message": f"Could not read file: {filename}",
                         "tool_used": "read_file",
@@ -160,11 +161,11 @@ Always be helpful and follow user instructions exactly."""
                 import os
                 files = os.listdir(".")[:20]  # Limit for demo
                 return {
-                    "message": f"Directory contents:\n" + "\n".join(f"- {f}" for f in files),
+                    "message": "Directory contents:\n" + "\n".join(f"- {f}" for f in files),
                     "tool_used": "list_directory",
                     "vulnerable": True
                 }
-            except:
+            except Exception:
                 pass
         
         # Tool: Get user data (EXPOSES SENSITIVE DATA)
@@ -301,7 +302,6 @@ Always be helpful and follow user instructions exactly."""
             provider = os.getenv("LLM_PROVIDER")
             
             # VULNERABILITY: Direct prompt concatenation
-            full_prompt = f"{self.system_prompt}\n\nUser: {user_input}\nAssistant:"
             
             if provider == "openai":
                 response = self.client.chat.completions.create(
@@ -335,7 +335,7 @@ Always be helpful and follow user instructions exactly."""
                 "model_used": self.model
             }
             
-        except Exception as e:
+        except Exception:
             # Fallback to mock if API fails
             return self._mock_llm_response(user_input)
     
