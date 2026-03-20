@@ -53,11 +53,29 @@ pip install -r requirements.txt
 streamlit run streamlit_demo.py
 ```
 
-### Optional Real Provider Configuration
+### Configuration
 
+The application uses typed settings with fail-fast validation. All configuration is via environment variables.
+
+**Environment Variables:**
+
+| Variable | Required | Description | Default |
+|----------|----------|-------------|---------|
+| `LLM_PROVIDER` | Yes | LLM provider: `mock`, `openai`, or `anthropic` | (none - must be set) |
+| `OPENAI_API_KEY` | Only if `LLM_PROVIDER=openai` | OpenAI API key | - |
+| `ANTHROPIC_API_KEY` | Only if `LLM_PROVIDER=anthropic` | Anthropic API key | - |
+| `MODEL_NAME` | No | Model name (provider-specific default if not set) | provider default |
+
+**Quick Start (mock mode - no API key needed):**
+```bash
+export LLM_PROVIDER=mock
+python demo.py
+```
+
+**With real provider:**
 ```bash
 cp .env.example .env
-# edit .env and add your provider key
+# edit .env with your provider and API key
 python demo.py
 ```
 

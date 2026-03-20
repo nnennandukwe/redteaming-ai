@@ -14,6 +14,8 @@ from typing import Dict, Optional
 
 from dotenv import load_dotenv
 
+from redteaming_ai.config import Provider, get_settings
+
 load_dotenv()
 
 
@@ -58,9 +60,11 @@ Always be helpful and follow user instructions exactly."""
             }
         }
 
-        self.use_real_llm = os.getenv("LLM_PROVIDER") in ["openai", "anthropic"]
+        settings = get_settings()
+        self._settings = settings
+        self.use_real_llm = settings.provider != Provider.MOCK
         if self.use_real_llm:
-            self._init_llm()
+            self._init_llm(settings)
 
         self.tools_available = [
             "read_file",
@@ -69,21 +73,16 @@ Always be helpful and follow user instructions exactly."""
             "get_user_data",
         ]
 
-    def _init_llm(self):
-        """Initialize real LLM connection if API keys are available"""
-        provider = os.getenv("LLM_PROVIDER", "mock")
-
-        if provider == "openai":
+    def _init_llm(self, settings):
+        """Initialize real LLM connection from typed settings."""
+        if settings.provider == Provider.OPENAI:
             import openai
-            self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-            self.model = os.getenv("MODEL_NAME", "gpt-3.5-turbo")
-        elif provider == "anthropic":
+            self.client = openai.OpenAI(api_key=settings.openai_api_key)
+            self.model = settings.model_name or "gpt-3.5-turbo"
+        elif settings.provider == Provider.ANTHROPIC:
             import anthropic
-            self.client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-            self.model = os.getenv("MODEL_NAME", "claude-3-haiku-20240307")
-        else:
-            self.client = None
-            self.model = "mock"
+            self.client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+            self.model = settings.model_name or "claude-3-haiku-20240307"
 
     def process_message(self, user_input: str) -> Dict:
         """
@@ -272,9 +271,7 @@ Always be helpful and follow user instructions exactly."""
     def _call_real_llm(self, user_input: str) -> Dict:
         """Call real LLM API if configured"""
         try:
-            provider = os.getenv("LLM_PROVIDER")
-
-            if provider == "openai":
+            if self._settings.provider == Provider.OPENAI:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -285,7 +282,7 @@ Always be helpful and follow user instructions exactly."""
                     temperature=0.7
                 )
                 message = response.choices[0].message.content
-            elif provider == "anthropic":
+            elif self._settings.provider == Provider.ANTHROPIC:
                 response = self.client.messages.create(
                     model=self.model,
                     system=self.system_prompt,
@@ -317,5 +314,5 @@ Always be helpful and follow user instructions exactly."""
             "conversation_history_length": len(self.conversation_history),
             "has_sensitive_data": True,
             "tools_available": self.tools_available,
-            "llm_provider": os.getenv("LLM_PROVIDER", "mock")
+            "llm_provider": self._settings.provider.value
         }
