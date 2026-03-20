@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pre-commit hook to run linter
+
+echo "Running ruff linter..."
+
+ruff check .
+
+if [ $? -ne 0 ]; then
+    echo "Linter failed! Fix errors before committing."
+    exit 1
+fi
+
+echo "Linter passed!"
