@@ -1,4 +1,3 @@
-import os
 import tempfile
 from pathlib import Path
 
@@ -78,7 +77,7 @@ def test_save_report(storage):
         "duration": 10.0,
     }
 
-    report_id = storage.save_report(
+    storage.save_report(
         run_id=run_id,
         summary=summary,
         vulnerabilities=["No input sanitization"],
@@ -88,6 +87,7 @@ def test_save_report(storage):
     run = storage.get_run(run_id)
     assert run["report"] is not None
     assert run["report"]["run_id"] == run_id
+    assert run["report"]["leaked_data_types_json"] == '["credentials"]'
 
 
 def test_list_runs(storage):
