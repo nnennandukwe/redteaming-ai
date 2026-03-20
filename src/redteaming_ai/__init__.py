@@ -11,6 +11,7 @@ from redteaming_ai.agents import (
     RedTeamOrchestrator,
 )
 from redteaming_ai.config import Provider, Settings, get_settings
+from redteaming_ai.storage import RunStorage
 from redteaming_ai.target import VulnerableLLMApp
 
 __all__ = [
@@ -21,6 +22,7 @@ __all__ = [
     "Provider",
     "RedTeamAgent",
     "RedTeamOrchestrator",
+    "RunStorage",
     "Settings",
     "VulnerableLLMApp",
     "get_settings",
