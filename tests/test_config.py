@@ -1,5 +1,6 @@
 import pytest
 
+import redteaming_ai.config as config_module
 from redteaming_ai.config import Provider, Settings, get_settings
 
 
@@ -72,10 +73,19 @@ def test_get_settings_returns_settings(monkeypatch):
     assert isinstance(settings, Settings)
 
 
-def test_get_settings_reads_dotenv_file(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("LLM_PROVIDER=mock\nMODEL_NAME=dotenv-model\n")
+def test_get_settings_reads_repo_root_dotenv_from_subdirectory(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    package_dir = repo_root / "src" / "redteaming_ai"
+    working_dir = repo_root / "nested" / "workdir"
+    package_dir.mkdir(parents=True)
+    working_dir.mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='redteaming-ai'\n")
+    (repo_root / ".env").write_text("LLM_PROVIDER=mock\nMODEL_NAME=repo-root-model\n")
+    (working_dir / ".env").write_text("LLM_PROVIDER=openai\nMODEL_NAME=cwd-model\n")
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setattr(config_module, "__file__", str(package_dir / "config.py"))
 
     settings = get_settings()
 
     assert settings.provider == Provider.MOCK
-    assert settings.model_name == "dotenv-model"
+    assert settings.model_name == "repo-root-model"

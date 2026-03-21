@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import redteaming_ai.config as config_module
 from redteaming_ai.adapters import normalize_target_spec, resolve_target_spec
 
 
@@ -92,9 +93,16 @@ def test_resolve_hosted_chat_runtime_reads_api_key_from_dotenv(tmp_path, monkeyp
                 )
             )
 
-    monkeypatch.chdir(tmp_path)
+    repo_root = tmp_path / "repo"
+    package_dir = repo_root / "src" / "redteaming_ai"
+    working_dir = repo_root / "nested" / "workdir"
+    package_dir.mkdir(parents=True)
+    working_dir.mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='redteaming-ai'\n")
+    (repo_root / ".env").write_text("OPENAI_API_KEY=dotenv-openai-key\n")
+    monkeypatch.chdir(working_dir)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    (tmp_path / ".env").write_text("OPENAI_API_KEY=dotenv-openai-key\n")
+    monkeypatch.setattr(config_module, "__file__", str(package_dir / "config.py"))
     monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAIClient))
 
     spec = normalize_target_spec(
