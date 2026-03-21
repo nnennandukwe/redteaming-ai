@@ -34,6 +34,8 @@ def test_create_run(storage):
     run = storage.get_run(run_id)
     assert run["target_provider"] == "mock"
     assert run["target_config"] == {"test": True}
+    assert run["status"] == "running"
+    assert run["queued_at"] == run["started_at"]
 
 
 def test_record_attempt(storage):
@@ -64,6 +66,7 @@ def test_complete_run(storage):
     storage.complete_run(run_id, 12.5)
 
     run = storage.get_run(run_id)
+    assert run["status"] == "completed"
     assert run["completed_at"] is not None
     assert run["duration_seconds"] == 12.5
 
@@ -90,6 +93,19 @@ def test_save_report(storage):
     assert run["report"] is not None
     assert run["report"]["run_id"] == run_id
     assert run["report"]["leaked_data_types_json"] == '["credentials"]'
+
+
+def test_save_report_overwrites_existing_report(storage):
+    run_id = storage.create_run("mock", None, {})
+    storage.complete_run(run_id, 10.0)
+
+    storage.save_report(run_id, {"success_rate": 10.0}, ["old"], ["credentials"])
+    storage.save_report(run_id, {"success_rate": 20.0}, ["new"], ["api_keys"])
+
+    run = storage.get_run(run_id)
+    assert run["report"]["summary"]["success_rate"] == 20.0
+    assert run["report"]["vulnerabilities"] == ["new"]
+    assert run["report"]["leaked_data_types"] == ["api_keys"]
 
 
 def test_list_runs(storage):
@@ -140,8 +156,70 @@ def test_get_stats(storage):
     assert stats["total_targets"] == 1
     assert stats["total_runs"] == 1
     assert stats["completed_runs"] == 1
+    assert stats["failed_runs"] == 0
     assert stats["total_attempts"] == 1
     assert stats["total_duration_seconds"] == 10.0
+
+
+def test_create_target_and_queued_run(storage):
+    target = storage.create_target(
+        name="Demo target",
+        target_type="vulnerable_llm_app",
+        provider="mock",
+        model="demo",
+        config={"mode": "api"},
+    )
+
+    targets = storage.list_targets()
+    run_id = storage.create_queued_run(target["id"])
+    run = storage.get_run(run_id)
+
+    assert target["name"] == "Demo target"
+    assert len(targets) == 1
+    assert run["target_id"] == target["id"]
+    assert run["status"] == "queued"
+    assert run["started_at"] is None
+
+
+def test_mark_run_failed_and_get_evidence(storage):
+    run_id = storage.create_run("mock", None, {})
+    storage.record_attempt(run_id, "Agent", "test", "p", "response", False, [])
+
+    storage.mark_run_failed(run_id, "boom")
+
+    run = storage.get_run(run_id)
+    evidence = storage.get_run_evidence(run_id)
+
+    assert run["status"] == "failed"
+    assert run["error_message"] == "boom"
+    assert evidence["attempts"][0]["response"] == "response"
+    assert evidence["status"] == "failed"
+
+
+def test_state_transitions_are_guarded(storage):
+    target = storage.create_target(
+        name="Guarded target",
+        target_type="vulnerable_llm_app",
+        provider="mock",
+        config={},
+    )
+    run_id = storage.create_queued_run(target["id"])
+
+    storage.mark_run_started(run_id)
+    with pytest.raises(ValueError):
+        storage.mark_run_started(run_id)
+
+    storage.mark_run_failed(run_id, "boom")
+    with pytest.raises(ValueError):
+        storage.complete_run(run_id, 1.0)
+
+
+def test_foreign_keys_reject_unknown_run_ids(storage):
+    with pytest.raises(sqlite3.IntegrityError):
+        storage.record_attempt("missing", "Agent", "test", "p", "r", False, [])
+
+    with pytest.raises(sqlite3.IntegrityError):
+        storage.save_report("missing", {"success_rate": 0.0}, [], [])
 
 
 def test_full_response_is_preserved_in_storage(storage):
@@ -246,10 +324,79 @@ def test_init_db_migrates_v1_runs_to_targets_schema(temp_db):
     stats = storage.get_stats()
 
     assert run["target_id"] is not None
+    assert run["target_name"] == "vulnerable_llm_app:mock:demo-model"
+    assert run["target_type"] == "vulnerable_llm_app"
     assert run["target_provider"] == "mock"
     assert run["target_model"] == "demo-model"
     assert run["target_config"] == {"mode": "legacy"}
+    assert run["status"] == "running"
+    assert run["queued_at"] == "2026-03-20T00:00:00"
     assert stats["total_targets"] == 1
-    assert storage.conn.execute("SELECT MAX(version) FROM _schema_version").fetchone()[0] == 2
+    assert storage.conn.execute("SELECT MAX(version) FROM _schema_version").fetchone()[0] == 4
+
+    storage.close()
+
+
+def test_migration_preserves_incomplete_legacy_run_as_running(temp_db):
+    conn = sqlite3.connect(temp_db)
+    conn.execute("""
+        CREATE TABLE _schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT INTO _schema_version (version, applied_at) VALUES (2, ?)",
+        ("2026-03-20T00:00:00",),
+    )
+    conn.execute("""
+        CREATE TABLE targets (
+            id TEXT PRIMARY KEY,
+            provider TEXT,
+            model TEXT,
+            config_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY,
+            target_id TEXT,
+            target_provider TEXT,
+            target_model TEXT,
+            target_config_json TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_seconds REAL
+        )
+    """)
+    conn.execute("""
+        INSERT INTO targets (id, provider, model, config_json, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, ("legacy-target", "mock", "demo-model", "{}", "2026-03-20T00:00:00"))
+    conn.execute("""
+        INSERT INTO runs (
+            id, target_id, target_provider, target_model, target_config_json, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        "legacy-running",
+        "legacy-target",
+        "mock",
+        "demo-model",
+        "{}",
+        "2026-03-20T00:00:00",
+        None,
+    ))
+    conn.commit()
+    conn.close()
+
+    storage = RunStorage(db_path=temp_db)
+    storage.init_db()
+
+    run = storage.get_run("legacy-running")
+
+    assert run["status"] == "running"
+    assert run["queued_at"] == "2026-03-20T00:00:00"
+    assert run["completed_at"] is None
 
     storage.close()

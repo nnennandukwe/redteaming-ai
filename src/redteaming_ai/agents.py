@@ -250,7 +250,9 @@ class JailbreakAgent(RedTeamAgent):
 class RedTeamOrchestrator:
     """Orchestrates multiple red team agents for comprehensive testing"""
 
-    def __init__(self, storage: Optional[RunStorage] = None):
+    def __init__(
+        self, storage: Optional[RunStorage] = None, run_id: Optional[str] = None
+    ):
         self.agents = [
             PromptInjectionAgent(),
             DataExfiltrationAgent(),
@@ -258,7 +260,7 @@ class RedTeamOrchestrator:
         ]
         self.all_results = []
         self.storage = storage
-        self._current_run_id: Optional[str] = None
+        self._current_run_id: Optional[str] = run_id
 
     def run_attack_suite(self, target_app) -> Dict[str, Any]:
         """Run all agents against the target"""
@@ -274,7 +276,7 @@ class RedTeamOrchestrator:
 
         start_time = datetime.now()
 
-        if self.storage:
+        if self.storage and not self._current_run_id:
             target_info = target_app.get_system_info()
             self._current_run_id = self.storage.create_run(
                 target_provider=target_info.get("llm_provider", "unknown"),

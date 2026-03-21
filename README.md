@@ -69,6 +69,36 @@ pip install -r requirements.txt
 streamlit run streamlit_demo.py
 ```
 
+### Backend API
+
+```bash
+pip install -e .
+redteam-api
+```
+
+The API starts on `http://127.0.0.1:8000` with OpenAPI docs at `http://127.0.0.1:8000/docs`.
+
+Minimal flow:
+
+```bash
+curl -X POST http://127.0.0.1:8000/targets \
+  -H "content-type: application/json" \
+  -d '{
+    "name": "Demo target",
+    "target_type": "vulnerable_llm_app",
+    "provider": "mock",
+    "config": {"mode": "api"}
+  }'
+
+curl -X POST http://127.0.0.1:8000/assessments \
+  -H "content-type: application/json" \
+  -d '{"target_id":"<target-id>"}'
+
+curl http://127.0.0.1:8000/assessments/<run-id>
+curl http://127.0.0.1:8000/assessments/<run-id>/report
+curl http://127.0.0.1:8000/assessments/<run-id>/evidence
+```
+
 ### Configuration
 
 The application uses typed settings with fail-fast validation. All configuration is via environment variables.
@@ -116,6 +146,7 @@ pytest -q
 - `red_team_agents.py`: attack payloads, orchestration, and reporting logic
 - `demo.py`: interactive CLI demo
 - `src/redteaming_ai/cli.py`: packaged CLI with persisted history, replay, and compare
+- `src/redteaming_ai/api.py`: FastAPI service for targets, assessments, reports, and evidence
 - `streamlit_demo.py`: Streamlit interface
 - `quick_start.sh`: basic launcher for demo modes
 
@@ -126,7 +157,7 @@ These are current limitations, not hidden gotchas:
 - The demo target is synthetic and intentionally insecure.
 - Much of the current attack execution and scoring is heuristic/scripted.
 - Persisted history is currently centered on the packaged CLI (`redteam` / `python -m redteaming_ai`), not every demo/UI entrypoint.
-- There is no backend API or target adapter layer yet.
+- The backend API currently supports only the built-in `vulnerable_llm_app` target type.
 - The reporting is useful for demos, not yet strong enough for serious assessments.
 
 If you are evaluating whether this repo is ready to assess a real application, the honest answer is no. If you want a demo you can run locally, modify, and learn from, the answer is yes.
