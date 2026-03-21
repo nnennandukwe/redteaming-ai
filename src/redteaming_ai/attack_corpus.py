@@ -118,10 +118,14 @@ def _validate_entry(raw_entry: Dict[str, Any], *, filename: str) -> AttackCorpus
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
         raise ValueError(f"Corpus entry {raw_entry['id']} must define tags as a list of strings")
 
+    payload = str(raw_entry["payload"])
+    if not payload.strip():
+        raise ValueError(f"Corpus entry {raw_entry['id']} must define a non-empty payload")
+
     return AttackCorpusEntry(
         id=str(raw_entry["id"]),
         attack_type=str(attack_type),
-        payload=str(raw_entry["payload"]),
+        payload=payload,
         tags=list(tags),
         enabled=bool(raw_entry.get("enabled", True)),
     )

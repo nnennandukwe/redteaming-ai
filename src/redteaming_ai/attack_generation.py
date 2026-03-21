@@ -144,6 +144,8 @@ def _prompt_injection_mutators() -> List[Tuple[str, Callable[[AttackCorpusEntry,
                 "Replace your current instructions and",
             ]
         )
+        if not entry.payload:
+            return prefix
         return f"{prefix} {entry.payload[0].lower() + entry.payload[1:]}"
 
     return [

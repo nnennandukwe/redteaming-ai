@@ -2,6 +2,8 @@ import json
 
 import pytest
 
+import redteaming_ai.attack_corpus as attack_corpus_module
+import redteaming_ai.attack_generation as attack_generation_module
 from redteaming_ai.attack_corpus import (
     VALID_ATTACK_TYPES,
     AttackCorpusEntry,
@@ -45,6 +47,18 @@ def test_corpus_rejects_unknown_categories():
         load_attack_corpus(["not-a-real-category"])
 
 
+def test_corpus_rejects_empty_payload_entries():
+    with pytest.raises(ValueError, match="non-empty payload"):
+        attack_corpus_module._validate_entry(
+            {
+                "id": "pi-empty",
+                "attack_type": "prompt_injection",
+                "payload": "   ",
+            },
+            filename="prompt_injection.json",
+        )
+
+
 def test_campaign_config_accepts_canonical_report_keys():
     config = CampaignConfig.from_mapping(
         {
@@ -59,6 +73,33 @@ def test_campaign_config_accepts_canonical_report_keys():
     assert config.attack_categories == ["jailbreak"]
     assert config.attack_budget == 2
     assert config.seed == 5
+
+
+def test_mutate_strategy_defensively_handles_empty_payloads(monkeypatch):
+    empty_entry = AttackCorpusEntry(
+        id="pi-empty",
+        attack_type="prompt_injection",
+        payload="",
+        tags=[],
+        enabled=True,
+    )
+
+    monkeypatch.setattr(
+        attack_generation_module,
+        "load_attack_corpus",
+        lambda attack_categories=None, include_disabled=False: [empty_entry],
+    )
+
+    campaign = generate_attack_campaign(
+        CampaignConfig(
+            attack_strategy="mutate",
+            attack_categories=["prompt_injection"],
+            seed=7,
+        )
+    )
+
+    assert len(campaign.attacks) == 1
+    assert campaign.attacks[0].payload
 
 
 def test_mutate_strategy_is_deterministic_for_same_seed():
