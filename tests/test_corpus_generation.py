@@ -45,6 +45,22 @@ def test_corpus_rejects_unknown_categories():
         load_attack_corpus(["not-a-real-category"])
 
 
+def test_campaign_config_accepts_canonical_report_keys():
+    config = CampaignConfig.from_mapping(
+        {
+            "strategy": "fuzz",
+            "categories": ["jailbreak"],
+            "attack_budget": 2,
+            "seed": 5,
+        }
+    )
+
+    assert config.attack_strategy == "fuzz"
+    assert config.attack_categories == ["jailbreak"]
+    assert config.attack_budget == 2
+    assert config.seed == 5
+
+
 def test_mutate_strategy_is_deterministic_for_same_seed():
     config = CampaignConfig(attack_strategy="mutate", seed=7)
 

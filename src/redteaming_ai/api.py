@@ -61,8 +61,8 @@ def create_app(
     ) -> AssessmentResponse:
         try:
             campaign_config = {
-                "strategy": payload.attack_strategy,
-                "categories": payload.attack_categories,
+                "attack_strategy": payload.attack_strategy,
+                "attack_categories": payload.attack_categories,
                 "attack_budget": payload.attack_budget,
                 "seed": payload.seed,
             }

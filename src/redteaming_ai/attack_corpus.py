@@ -57,9 +57,15 @@ class CampaignConfig:
     def from_mapping(cls, value: Optional[Dict[str, Any]]) -> "CampaignConfig":
         if not value:
             return cls()
+        attack_categories = value.get("attack_categories")
+        if attack_categories is None:
+            attack_categories = value.get("categories")
+        attack_strategy = value.get("attack_strategy")
+        if attack_strategy is None:
+            attack_strategy = value.get("strategy", "corpus")
         return cls(
-            attack_categories=value.get("attack_categories") or list(VALID_ATTACK_TYPES),
-            attack_strategy=value.get("attack_strategy", "corpus"),
+            attack_categories=attack_categories or list(VALID_ATTACK_TYPES),
+            attack_strategy=attack_strategy or "corpus",
             attack_budget=value.get("attack_budget"),
             seed=value.get("seed", 0),
         )
@@ -149,4 +155,3 @@ def group_corpus_by_type(
     for entry in entries:
         grouped.setdefault(entry.attack_type, []).append(entry)
     return grouped
-

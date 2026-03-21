@@ -47,8 +47,8 @@ def test_assessment_endpoints_return_report_evidence_and_export(tmp_path):
     def scripted_runner(storage, run_id, target):
         assert target["target_type"] == "vulnerable_llm_app"
         assert target["campaign_config"] == {
-            "strategy": "mutate",
-            "categories": ["prompt_injection", "jailbreak"],
+            "attack_strategy": "mutate",
+            "attack_categories": ["prompt_injection", "jailbreak"],
             "attack_budget": 4,
             "seed": 7,
         }
