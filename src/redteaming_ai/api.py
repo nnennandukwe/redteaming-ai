@@ -60,11 +60,18 @@ def create_app(
         service: AssessmentService = Depends(get_assessment_service),
     ) -> AssessmentResponse:
         try:
+            campaign_config = {
+                "strategy": payload.attack_strategy,
+                "categories": payload.attack_categories,
+                "attack_budget": payload.attack_budget,
+                "seed": payload.seed,
+            }
             run = service.create_assessment(
                 target_type=payload.target_type,
                 target_provider=payload.target_provider,
                 target_model=payload.target_model,
                 target_config=payload.target_config,
+                campaign_config=campaign_config,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -101,6 +101,10 @@ def _normalize_report_artifact(
             if key not in normalized and run.get(key) is not None:
                 normalized[key] = run.get(key)
 
+        campaign_config = run.get("campaign_config")
+        if isinstance(campaign_config, dict):
+            normalized.setdefault("campaign", dict(campaign_config))
+
         target_config = run.get("target_config")
         if isinstance(target_config, dict):
             normalized.setdefault("target_config", dict(target_config))
@@ -590,8 +594,13 @@ def _run_packaged_assessment(storage: RunStorage, auto_run: AutoRunSpec) -> Dict
         target_provider=resolved_spec.target_provider,
         target_model=resolved_spec.target_model,
         target_config=target_config,
+        campaign_config=auto_run.campaign,
     )
-    orchestrator = RedTeamOrchestrator(storage=storage, run_id=run_id)
+    orchestrator = RedTeamOrchestrator(
+        storage=storage,
+        run_id=run_id,
+        campaign_config=auto_run.campaign,
+    )
     return orchestrator.run_attack_suite(target_runtime)
 
 

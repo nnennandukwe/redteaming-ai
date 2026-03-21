@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 AVAILABLE_EXPORTS = ("json", "markdown")
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
 SCHEMA_VERSION = REPORT_SCHEMA_VERSION
 
 SENSITIVE_DATA_TYPES = {
@@ -86,6 +86,191 @@ class Finding:
     last_seen_at: str = ""
     remediation: str = ""
     rationale: str = ""
+
+
+def _coerce_campaign_mapping(raw_campaign: Optional[Any]) -> Optional[Dict[str, Any]]:
+    if raw_campaign is None:
+        return None
+    if isinstance(raw_campaign, dict):
+        campaign = dict(raw_campaign)
+    elif hasattr(raw_campaign, "model_dump") and callable(raw_campaign.model_dump):
+        campaign = raw_campaign.model_dump()
+    elif hasattr(raw_campaign, "to_dict") and callable(raw_campaign.to_dict):
+        campaign = raw_campaign.to_dict()
+    else:
+        campaign = {}
+
+    if not isinstance(campaign, dict):
+        return None
+
+    strategy = campaign.get("strategy", campaign.get("attack_strategy", "corpus"))
+    categories = campaign.get("categories", campaign.get("attack_categories", []))
+    attack_budget = campaign.get("attack_budget")
+    if attack_budget is None:
+        attack_budget = campaign.get("budget")
+    seed = campaign.get("seed", 0)
+
+    normalized: Dict[str, Any] = {
+        "strategy": strategy or "corpus",
+        "categories": list(categories or []),
+        "attack_budget": attack_budget,
+        "seed": seed if seed is not None else 0,
+    }
+
+    if "generated_attacks" in campaign:
+        normalized["generated_attacks"] = campaign.get("generated_attacks")
+    if "coverage" in campaign and campaign.get("coverage") is not None:
+        normalized["coverage"] = dict(campaign.get("coverage") or {})
+    return normalized
+
+
+def _build_campaign_coverage(
+    attempts: Iterable[Dict[str, Any]],
+    categories: Optional[List[str]] = None,
+    existing_coverage: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if existing_coverage:
+        coverage: Dict[str, Dict[str, Any]] = {}
+        ordered_types: List[str] = []
+        if categories:
+            ordered_types.extend(
+                [category for category in categories if category not in ordered_types]
+            )
+        ordered_types.extend(
+            [
+                attack_type
+                for attack_type in existing_coverage
+                if attack_type not in ordered_types
+            ]
+        )
+
+        for attack_type in ordered_types:
+            stats = existing_coverage.get(attack_type) or {}
+            selected_entries = _normalize_campaign_entries(
+                stats.get("selected_entries", stats.get("selected_ids", []))
+            )
+            executed_entries = _normalize_campaign_entries(
+                stats.get("executed_entries", stats.get("executed_ids", []))
+            )
+            coverage[attack_type] = {
+                "corpus_total": stats.get("corpus_total"),
+                "selected_total": stats.get(
+                    "selected_total",
+                    stats.get("selected_count", len(selected_entries)),
+                ),
+                "executed_total": stats.get(
+                    "executed_total",
+                    stats.get("executed_count", len(executed_entries)),
+                ),
+                "selected_entries": selected_entries,
+                "executed_entries": executed_entries,
+            }
+        return coverage
+
+    coverage: Dict[str, Dict[str, Any]] = {}
+    ordered_types: List[str] = []
+    if categories:
+        ordered_types.extend(
+            [category for category in categories if category not in ordered_types]
+        )
+
+    for attempt in attempts:
+        attack_type = str(attempt.get("attack_type", "unknown"))
+        if attack_type not in ordered_types:
+            ordered_types.append(attack_type)
+
+    for attack_type in ordered_types:
+        coverage[attack_type] = {
+            "corpus_total": None,
+            "selected_total": 0,
+            "executed_total": 0,
+            "selected_entries": [],
+            "executed_entries": [],
+        }
+
+    for attempt in attempts:
+        attack_type = str(attempt.get("attack_type", "unknown"))
+        entry = _campaign_entry_from_attempt(attempt)
+        stats = coverage.setdefault(
+            attack_type,
+            {
+                "corpus_total": None,
+                "selected_total": 0,
+                "executed_total": 0,
+                "selected_entries": [],
+                "executed_entries": [],
+            },
+        )
+        stats["selected_total"] += 1
+        stats["executed_total"] += 1
+        stats["selected_entries"].append(entry)
+        stats["executed_entries"].append(entry)
+
+    return coverage
+
+
+def _normalize_campaign_entries(raw_entries: Any) -> List[str]:
+    if raw_entries is None:
+        return []
+    if isinstance(raw_entries, (list, tuple, set)):
+        entries = list(raw_entries)
+    else:
+        entries = [raw_entries]
+
+    normalized: List[str] = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            candidate = (
+                entry.get("corpus_id")
+                or entry.get("id")
+                or entry.get("attempt_id")
+                or entry.get("payload")
+            )
+            normalized.append(
+                str(candidate)
+                if candidate is not None
+                else json.dumps(entry, sort_keys=True, default=str)
+            )
+            continue
+        normalized.append(str(entry))
+    return normalized
+
+
+def _campaign_entry_from_attempt(attempt: Dict[str, Any]) -> str:
+    response_metadata = attempt.get("response_metadata") or {}
+    if isinstance(response_metadata, dict) and response_metadata.get("corpus_id"):
+        return str(response_metadata["corpus_id"])
+
+    payload = attempt.get("payload")
+    if payload:
+        return str(payload)
+    attempt_id = attempt.get("id")
+    if attempt_id:
+        return str(attempt_id)
+    return "unknown"
+
+
+def build_campaign_artifact(
+    campaign: Optional[Any],
+    *,
+    attempts: Optional[Iterable[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    normalized = _coerce_campaign_mapping(campaign)
+    if normalized is None:
+        return None
+
+    attempts_list = list(attempts or [])
+    normalized.setdefault("strategy", "corpus")
+    normalized.setdefault("categories", [])
+    normalized.setdefault("attack_budget", None)
+    normalized.setdefault("seed", 0)
+    normalized.setdefault("generated_attacks", len(attempts_list))
+    normalized["coverage"] = _build_campaign_coverage(
+        attempts_list,
+        categories=normalized.get("categories"),
+        existing_coverage=normalized.get("coverage"),
+    )
+    return normalized
 
 
 def _attempt_is_confirmed_success(attempt: Dict[str, Any]) -> bool:
@@ -296,6 +481,7 @@ def _coerce_run_mapping(run: Optional[Any]) -> Dict[str, Any]:
         "target_provider",
         "target_model",
         "target_config",
+        "campaign_config",
         "duration_seconds",
         "status",
         "queued_at",
@@ -421,6 +607,7 @@ def build_assessment_report(
     *,
     duration_seconds: float,
     generated_at: str | None = None,
+    campaign: Optional[Any] = None,
 ) -> Dict[str, Any]:
     normalized_attempts = [_normalize_attempt(attempt) for attempt in attempts]
     total_attacks = len(normalized_attempts)
@@ -446,7 +633,7 @@ def build_assessment_report(
     vulnerabilities = [finding["title"] for finding in findings]
     results = list(normalized_attempts)
 
-    return {
+    report = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "generated_at": generated_at or datetime.now().isoformat(),
         "available_exports": list(AVAILABLE_EXPORTS),
@@ -463,6 +650,8 @@ def build_assessment_report(
         "vulnerabilities": vulnerabilities,
         "results": results,
     }
+    report["campaign"] = build_campaign_artifact(campaign, attempts=normalized_attempts)
+    return report
 
 
 def build_report_artifact(
@@ -492,6 +681,7 @@ def build_report_artifact(
         generated_at=generated_at
         or report_row_data.get("created_at")
         or report_row_data.get("generated_at"),
+        campaign=run_data.get("campaign_config"),
     )
 
     report["id"] = run_data.get("id")
@@ -502,6 +692,7 @@ def build_report_artifact(
     report["target_provider"] = run_data.get("target_provider")
     report["target_model"] = run_data.get("target_model")
     report["target_config"] = run_data.get("target_config") or {}
+    report.setdefault("campaign", None)
     report["status"] = run_data.get("status")
     report["queued_at"] = run_data.get("queued_at")
     report["started_at"] = run_data.get("started_at")

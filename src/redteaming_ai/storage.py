@@ -16,12 +16,13 @@ from redteaming_ai.reporting import (
     SCHEMA_VERSION as REPORT_SCHEMA_VERSION,
 )
 from redteaming_ai.reporting import (
+    build_campaign_artifact,
     build_report_artifact,
     export_report,
     report_to_dict,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_TARGET_TYPE = "vulnerable_llm_app"
 
 
@@ -78,6 +79,10 @@ class RunStorage:
             if existing is not None:
                 return int(existing)
 
+        if self._table_exists("runs") and self._column_exists(
+            "runs", "campaign_config_json"
+        ):
+            return 6
         if self._table_exists("reports") and self._column_exists("reports", "report_json"):
             return 5
         if self._table_exists("runs") and self._column_exists("runs", "status"):
@@ -106,6 +111,36 @@ class RunStorage:
 
     def _json_dumps(self, value: Any, *, sort_keys: bool = False) -> str:
         return json.dumps(value, sort_keys=sort_keys, default=str)
+
+    def _normalize_campaign_config(self, campaign_config: Any) -> Optional[Dict[str, Any]]:
+        if campaign_config is None:
+            return None
+        if isinstance(campaign_config, str):
+            try:
+                parsed = json.loads(campaign_config)
+            except json.JSONDecodeError:
+                parsed = {}
+        elif isinstance(campaign_config, dict):
+            parsed = dict(campaign_config)
+        elif hasattr(campaign_config, "model_dump") and callable(campaign_config.model_dump):
+            parsed = dict(campaign_config.model_dump())
+        elif hasattr(campaign_config, "to_dict") and callable(campaign_config.to_dict):
+            parsed = dict(campaign_config.to_dict())
+        else:
+            parsed = {}
+
+        if not parsed:
+            return {}
+
+        canonical = build_campaign_artifact(parsed, attempts=[])
+        if not canonical:
+            return {}
+        return {
+            "strategy": canonical.get("strategy", "corpus"),
+            "categories": canonical.get("categories", []),
+            "attack_budget": canonical.get("attack_budget"),
+            "seed": canonical.get("seed", 0),
+        }
 
     def _default_target_name(
         self,
@@ -143,6 +178,7 @@ class RunStorage:
                 target_provider TEXT,
                 target_model TEXT,
                 target_config_json TEXT,
+                campaign_config_json TEXT,
                 status TEXT NOT NULL,
                 queued_at TEXT NOT NULL,
                 started_at TEXT,
@@ -501,6 +537,11 @@ class RunStorage:
                 ),
             )
 
+    def _migrate_to_v6(self):
+        conn = self.conn
+        if not self._column_exists("runs", "campaign_config_json"):
+            conn.execute("ALTER TABLE runs ADD COLUMN campaign_config_json TEXT")
+
     def init_db(self):
         """Initialize database schema."""
         conn = self.conn
@@ -526,6 +567,9 @@ class RunStorage:
             current_version = 4
         if current_version < 5:
             self._migrate_to_v5()
+            current_version = 5
+        if current_version < 6:
+            self._migrate_to_v6()
         self._record_schema_version(SCHEMA_VERSION)
         self._ensure_schema()
         conn.commit()
@@ -602,11 +646,13 @@ class RunStorage:
         *,
         target_type: str = DEFAULT_TARGET_TYPE,
         target_id: Optional[str] = None,
+        campaign_config: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Create a new running run record. Returns run_id."""
         run_id = str(uuid.uuid4())
         created_at = datetime.now().isoformat()
         config_json = self._normalize_target_config(target_config)
+        campaign_json = self._normalize_campaign_config(campaign_config)
         resolved_target_id = target_id or self._get_or_create_target(
             target_provider,
             target_model,
@@ -621,11 +667,12 @@ class RunStorage:
                 target_provider,
                 target_model,
                 target_config_json,
+                campaign_config_json,
                 status,
                 queued_at,
                 started_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 run_id,
@@ -633,6 +680,7 @@ class RunStorage:
                 target_provider,
                 target_model,
                 config_json,
+                json.dumps(campaign_json, sort_keys=True) if campaign_json is not None else None,
                 "running",
                 created_at,
                 created_at,
@@ -656,11 +704,12 @@ class RunStorage:
                 target_provider,
                 target_model,
                 target_config_json,
+                campaign_config_json,
                 status,
                 queued_at,
                 started_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 run_id,
@@ -668,6 +717,7 @@ class RunStorage:
                 target["provider"],
                 target["model"],
                 self._normalize_target_config(target["config"]),
+                None,
                 "queued",
                 queued_at,
                 None,
@@ -835,6 +885,7 @@ class RunStorage:
                 "target_provider",
                 "target_model",
                 "target_config",
+                "campaign_config",
                 "status",
                 "queued_at",
                 "started_at",
@@ -852,6 +903,15 @@ class RunStorage:
             artifact["vulnerabilities"] = vulnerabilities
         if leaked_data_types is not None:
             artifact["leaked_data_types"] = leaked_data_types
+        if "campaign" not in artifact and context and context.get("campaign_config") is not None:
+            campaign = build_campaign_artifact(
+                context["campaign_config"], attempts=artifact.get("attempts", [])
+            )
+            if campaign is not None:
+                if summary and not campaign.get("generated_attacks"):
+                    campaign["generated_attacks"] = summary.get("total_attacks", 0)
+                artifact["campaign"] = campaign
+        artifact.setdefault("campaign", None)
         self.conn.execute(
             """
             INSERT INTO reports (
@@ -920,6 +980,16 @@ class RunStorage:
             except json.JSONDecodeError:
                 report_dict = None
 
+        if report_dict is not None:
+            if report_dict.get("schema_version") != REPORT_SCHEMA_VERSION:
+                report_dict["schema_version"] = REPORT_SCHEMA_VERSION
+            if run["campaign_config_json"] and not report_dict.get("campaign"):
+                report_dict["campaign"] = build_campaign_artifact(
+                    json.loads(run["campaign_config_json"]),
+                    attempts=[dict(attempt) for attempt in attempts],
+                )
+            report_dict.setdefault("campaign", None)
+
         if report_dict is None and (attempts or report):
             report_dict = build_report_artifact(
                 [dict(attempt) for attempt in attempts],
@@ -933,6 +1003,9 @@ class RunStorage:
                     "target_config": json.loads(
                         run["target_config_json_resolved"] or run["target_config_json"] or "{}"
                     ),
+                    "campaign_config": json.loads(run["campaign_config_json"])
+                    if run["campaign_config_json"]
+                    else None,
                     "status": run["status"],
                     "queued_at": run["queued_at"],
                     "started_at": run["started_at"],
@@ -953,6 +1026,9 @@ class RunStorage:
             "target_config": json.loads(
                 run["target_config_json_resolved"] or run["target_config_json"] or "{}"
             ),
+            "campaign_config": json.loads(run["campaign_config_json"])
+            if run["campaign_config_json"]
+            else None,
             "status": run["status"],
             "queued_at": run["queued_at"],
             "started_at": run["started_at"],
@@ -1043,6 +1119,14 @@ class RunStorage:
             raise ValueError(f"Run {run_id} not found")
 
         attempts = [self._attempt_row_to_evidence(attempt) for attempt in run["attempts"]]
+        campaign = None
+        if run["report"] and run["report"].get("campaign") is not None:
+            campaign = run["report"].get("campaign")
+        elif run["campaign_config"] is not None:
+            campaign = build_report_artifact(
+                [dict(attempt) for attempt in run["attempts"]],
+                run=run,
+            ).get("campaign")
         return {
             "id": run["id"],
             "target_id": run["target_id"],
@@ -1054,6 +1138,7 @@ class RunStorage:
             "duration_seconds": run["duration_seconds"],
             "error_message": run["error_message"],
             "target_config": run["target_config"],
+            "campaign": campaign,
             "attempts": attempts,
         }
 

@@ -8,6 +8,8 @@ from redteaming_ai import (
     RedTeamOrchestrator,
     VulnerableLLMApp,
 )
+from redteaming_ai.attack_corpus import CampaignConfig
+from redteaming_ai.campaigns import build_attack_campaign
 from redteaming_ai.reporting import build_assessment_report
 
 
@@ -33,7 +35,7 @@ def test_directory_tool_still_works_with_explicit_invocation():
 
 def test_orchestrator_results_reset_between_runs():
     orchestrator = RedTeamOrchestrator()
-    expected_attack_count = sum(len(agent.attack_payloads) for agent in orchestrator.agents)
+    expected_attack_count = len(build_attack_campaign(CampaignConfig()).attacks)
 
     first_report = orchestrator.run_attack_suite(VulnerableLLMApp())
     second_report = orchestrator.run_attack_suite(VulnerableLLMApp())
@@ -42,6 +44,9 @@ def test_orchestrator_results_reset_between_runs():
     assert second_report["summary"]["total_attacks"] == expected_attack_count
     assert len(first_report["results"]) == expected_attack_count
     assert len(second_report["results"]) == expected_attack_count
+    assert first_report["campaign"]["generated_attacks"] == expected_attack_count
+    assert second_report["campaign"]["strategy"] == "corpus"
+    assert second_report["campaign"]["seed"] == 0
 
 
 def test_report_contains_required_scoring_fields():

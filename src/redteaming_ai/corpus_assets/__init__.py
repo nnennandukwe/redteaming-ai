@@ -1,0 +1,2 @@
+"""Versioned attack corpus assets."""
+

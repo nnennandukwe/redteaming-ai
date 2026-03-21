@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from redteaming_ai.agents import PromptInjectionAgent
 from redteaming_ai.reporting import build_report_artifact, report_to_json
 from redteaming_ai.storage import RunStorage
 
@@ -162,8 +161,9 @@ def test_save_report_persists_canonical_report_and_overwrites(storage):
     run = storage.get_run(run_id)
     assert run["report"] is not None
     assert run["report"]["run_id"] == run_id
-    assert run["report"]["schema_version"] == 1
+    assert run["report"]["schema_version"] == 2
     assert run["report"]["available_exports"] == ["json", "markdown"]
+    assert run["report"]["campaign"] is None
     assert run["report"]["findings"]
 
     # Overwrite the same report row and ensure the persisted artifact updates in place.
@@ -206,15 +206,79 @@ def test_regenerate_report_builds_findings_from_attempts(storage):
 
     report = storage.regenerate_report(run_id)
 
-    assert report["schema_version"] == 1
+    assert report["schema_version"] == 2
     assert report["summary"]["total_attacks"] == 2
     assert report["summary"]["successful_attacks"] == 1
     assert report["summary"]["success_rate"] == 50.0
+    assert report["campaign"] is None
     assert "system_prompt" in report["leaked_data_types"]
     assert any(finding["severity"] == "critical" for finding in report["findings"])
     assert any(finding["category"] == "prompt_injection" for finding in report["findings"])
     assert report["attempts"][0]["response_metadata"]["response_length"] > 0
     assert json.loads(report_to_json(report))["run_id"] == run_id
+
+
+def test_campaign_config_persists_and_surfaces_in_reports(storage):
+    run_id = storage.create_run(
+        "mock",
+        None,
+        {},
+        campaign_config={
+            "strategy": "mutate",
+            "categories": ["prompt_injection", "jailbreak"],
+            "attack_budget": 5,
+            "seed": 9,
+        },
+    )
+    storage.record_attempt(
+        run_id,
+        "Agent1",
+        "prompt_injection",
+        "payload1",
+        "response1",
+        True,
+        ["credentials"],
+    )
+    storage.record_attempt(
+        run_id,
+        "Agent2",
+        "jailbreak",
+        "payload2",
+        "response2",
+        False,
+        [],
+    )
+    storage.complete_run(run_id, 2.0)
+    storage.save_report(
+        run_id,
+        summary={
+            "total_attacks": 2,
+            "successful_attacks": 1,
+            "success_rate": 50.0,
+            "duration": 2.0,
+        },
+        vulnerabilities=["Prompt injection succeeded"],
+        leaked_data_types=["credentials"],
+    )
+
+    run = storage.get_run(run_id)
+    report = storage.get_report_artifact(run_id)
+    evidence = storage.get_run_evidence(run_id)
+
+    assert run["campaign_config"] == {
+        "strategy": "mutate",
+        "categories": ["prompt_injection", "jailbreak"],
+        "attack_budget": 5,
+        "seed": 9,
+    }
+    assert report["campaign"]["strategy"] == "mutate"
+    assert report["campaign"]["categories"] == ["prompt_injection", "jailbreak"]
+    assert report["campaign"]["attack_budget"] == 5
+    assert report["campaign"]["seed"] == 9
+    assert report["campaign"]["generated_attacks"] == 2
+    assert report["campaign"]["coverage"]["prompt_injection"]["executed_total"] == 1
+    assert report["campaign"]["coverage"]["jailbreak"]["executed_total"] == 1
+    assert evidence["campaign"]["strategy"] == "mutate"
 
 
 def test_delete_run(storage):
@@ -293,25 +357,15 @@ def test_foreign_keys_reject_unknown_run_ids(storage):
 def test_full_response_is_preserved_in_storage(storage):
     long_message = "sensitive-" * 40
 
-    class DummyTarget:
-        def process_message(self, _payload):
-            return {"message": long_message, "vulnerable": True}
-
-    agent = PromptInjectionAgent()
-    agent.attack_payloads = ["payload"]
-
-    result = agent.attack(DummyTarget())[0]
-    assert result.response == long_message
-
     run_id = storage.create_run("mock", None, {"test": True})
     storage.record_attempt(
         run_id=run_id,
-        agent_name=result.agent_name,
-        attack_type=result.attack_type,
-        payload=result.payload,
-        response=result.response,
-        success=result.success,
-        data_leaked=result.data_leaked,
+        agent_name="Prompt Injection Agent",
+        attack_type="prompt_injection",
+        payload="payload",
+        response=long_message,
+        success=True,
+        data_leaked=["system_prompt"],
     )
 
     run = storage.get_run(run_id)
@@ -514,14 +568,16 @@ def test_init_db_migrates_legacy_schema_to_v5_and_backfills_reports(temp_db):
     assert run["target_provider"] == "mock"
     assert run["target_model"] == "demo-model"
     assert run["target_config"] == {"mode": "legacy"}
+    assert run["campaign_config"] is None
     assert run["report"] is not None
-    assert run["report"]["schema_version"] == 1
+    assert run["report"]["schema_version"] == 2
     assert run["report"]["summary"]["total_attacks"] == 1
     assert run["report"]["findings"]
+    assert run["report"]["campaign"] is None
     assert storage.conn.execute(
         "SELECT report_json FROM reports WHERE run_id = ?", ("legacy-run",)
     ).fetchone()[0] is not None
     assert stats["total_targets"] == 1
-    assert storage.conn.execute("SELECT MAX(version) FROM _schema_version").fetchone()[0] == 5
+    assert storage.conn.execute("SELECT MAX(version) FROM _schema_version").fetchone()[0] == 6
 
     storage.close()

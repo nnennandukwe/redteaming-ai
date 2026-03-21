@@ -405,9 +405,13 @@ def test_cli_auto_accepts_attack_campaign_flags(monkeypatch):
             self.closed = True
 
     class SpyOrchestrator:
-        def __init__(self, storage, run_id=None):
+        last_instance = None
+
+        def __init__(self, storage, run_id=None, campaign_config=None):
             self.storage = storage
             self.run_id = run_id
+            self.campaign_config = campaign_config
+            SpyOrchestrator.last_instance = self
 
         def run_attack_suite(self, _target):
             return {
@@ -471,6 +475,18 @@ def test_cli_auto_accepts_attack_campaign_flags(monkeypatch):
         "attack_budget": 12,
         "seed": 7,
     }
+    assert SpyStorage.last_instance.created["campaign_config"] == {
+        "attack_categories": ["prompt_injection", "jailbreak"],
+        "attack_strategy": "fuzz",
+        "attack_budget": 12,
+        "seed": 7,
+    }
+    assert SpyOrchestrator.last_instance.campaign_config == {
+        "attack_categories": ["prompt_injection", "jailbreak"],
+        "attack_strategy": "fuzz",
+        "attack_budget": 12,
+        "seed": 7,
+    }
     assert SpyStorage.last_instance.created["target_config"]["capabilities"]["tool_use"] is True
 
 
@@ -494,9 +510,10 @@ def test_cli_auto_closes_storage_on_failure(monkeypatch):
             self.closed = True
 
     class FailingOrchestrator:
-        def __init__(self, storage, run_id=None):
+        def __init__(self, storage, run_id=None, campaign_config=None):
             self.storage = storage
             self.run_id = run_id
+            self.campaign_config = campaign_config
 
         def run_attack_suite(self, _target):
             raise RuntimeError("boom")
