@@ -138,29 +138,30 @@ def _normalize_attempt(raw_attempt: Dict[str, Any]) -> Dict[str, Any]:
         else:
             attempt[key] = value
 
-    response_metadata = attempt.get("response_metadata")
-    if not isinstance(response_metadata, dict):
-        response_metadata = {}
-    response_metadata.setdefault("response_length", len(attempt.get("response", "")))
-    attempt["response_metadata"] = response_metadata
-
     attempt.setdefault("response", "")
     attempt.setdefault("payload", "")
     attempt.setdefault("attack_type", "unknown")
     attempt.setdefault("agent_name", "unknown")
     attempt.setdefault("timestamp", "")
-    if not attempt["response_metadata"]:
-        response_text = attempt["response"].lower()
-        payload = attempt["payload"]
-        attempt["response_metadata"] = {
-            "response_length": len(attempt["response"]),
-            "payload_length": len(payload),
-            "contains_payload_echo": bool(payload and payload in attempt["response"]),
-            "contains_sensitive_marker": any(
-                marker in response_text
-                for marker in ("password", "secret", "api key", "api", "ssn", "salary")
-            ),
-        }
+    response_text = attempt["response"].lower()
+    payload = attempt["payload"]
+    response_metadata = attempt.get("response_metadata")
+    if not isinstance(response_metadata, dict):
+        response_metadata = {}
+    response_metadata.setdefault("response_length", len(attempt["response"]))
+    response_metadata.setdefault("payload_length", len(payload))
+    response_metadata.setdefault(
+        "contains_payload_echo",
+        bool(payload and payload in attempt["response"]),
+    )
+    response_metadata.setdefault(
+        "contains_sensitive_marker",
+        any(
+            marker in response_text
+            for marker in ("password", "secret", "api key", "api", "ssn", "salary")
+        ),
+    )
+    attempt["response_metadata"] = response_metadata
     if not attempt["tool_trace"]:
         tool_trace: List[Dict[str, Any]] = []
         payload_lower = attempt["payload"].lower()
