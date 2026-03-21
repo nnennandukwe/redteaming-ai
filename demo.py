@@ -297,14 +297,14 @@ def main():
             orchestrator.run_attack_suite(target)
         else:
             console.print("[yellow]Usage:[/yellow]")
-            console.print("  python demo.py          # Interactive demo")
-            console.print("  python demo.py --quick  # 5-minute quick demo")
-            console.print("  python demo.py --auto   # Automated attack only")
+            console.print("  uv run python demo.py          # Interactive demo")
+            console.print("  uv run python demo.py --quick  # 5-minute quick demo")
+            console.print("  uv run python demo.py --auto   # Automated attack only")
             console.print("")
             console.print("[yellow]Persisted history/replay/compare:[/yellow]")
-            console.print("  redteam --history")
-            console.print("  redteam --replay <id>")
-            console.print("  redteam --compare <run-a> <run-b>")
+            console.print("  uv run redteam --history")
+            console.print("  uv run redteam --replay <id>")
+            console.print("  uv run redteam --compare <run-a> <run-b>")
     else:
         demo.run_interactive_demo()
 

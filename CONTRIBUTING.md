@@ -11,12 +11,28 @@ Thanks for contributing to `redteaming-ai`.
 
 ## Local Workflow
 
+- Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/) as the only required local tool.
+- Create a local `.env` file from `.env.example`. For smoke tests and local demo work, keep `LLM_PROVIDER=mock`.
+- Sync the environment from the committed lockfile:
+  ```bash
+  uv sync --frozen --extra dev
+  ```
 - Use a feature branch for your work.
 - Keep commits scoped to a single concern when practical.
 - Run the relevant local checks before opening a pull request:
   ```bash
-  pytest -q
-  ruff check .
+  uv run pytest -q
+  uv run ruff check .
+  ```
+- Use the packaged workflows as the default maintenance surface:
+  ```bash
+  uv run redteam
+  uv run redteam-api
+  ```
+- Treat `demo.py` and `streamlit_demo.py` as secondary demo entrypoints:
+  ```bash
+  uv run python demo.py
+  uv run streamlit run streamlit_demo.py
   ```
 - Update docs when behavior, interfaces, or setup steps change.
 

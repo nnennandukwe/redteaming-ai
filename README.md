@@ -32,44 +32,42 @@ The codebase currently centers on:
 
 ## Quick Start
 
-### Local Demo
+### Cross-Platform Bootstrap
+
+1. Install [`uv`](https://docs.astral.sh/uv/getting-started/installation/).
+2. Create a local `.env` file from `.env.example`. For local smoke tests and demo runs, keep `LLM_PROVIDER=mock`.
+3. Sync the project environment from the committed lockfile:
 
 ```bash
-pip install -r requirements.txt
-python demo.py
+uv sync --frozen --extra dev
 ```
 
-### Quick Automated Run
+The `uv` commands below are the canonical workflow and work the same on macOS, Linux, and Windows.
+
+### Packaged Workflows (Primary)
 
 ```bash
-pip install -r requirements.txt
-python demo.py --auto
-```
-
-### Persisted CLI Workflows
-
-```bash
-pip install -e .
-redteam --auto
-redteam --auto --attack-strategy corpus --seed 0
-redteam --auto --attack-strategy mutate --attack-categories prompt_injection,jailbreak --seed 42
-redteam --auto --attack-strategy fuzz --attack-categories prompt_injection,data_exfiltration,jailbreak --attack-budget 12 --seed 7
-redteam --auto --target-type hosted_chat_model --target-provider openai --target-model gpt-4.1
-redteam --history
-redteam --replay <run-id>
-redteam --export <run-id> --format json
-redteam --export <run-id> --format markdown --output ./report.md
-redteam --compare <run-a> <run-b>
+uv run redteam --auto
+uv run redteam --auto --attack-strategy corpus --seed 0
+uv run redteam --auto --attack-strategy mutate --attack-categories prompt_injection,jailbreak --seed 42
+uv run redteam --auto --attack-strategy fuzz --attack-categories prompt_injection,data_exfiltration,jailbreak --attack-budget 12 --seed 7
+uv run redteam --auto --target-type hosted_chat_model --target-provider openai --target-model gpt-4.1
+uv run redteam --history
+uv run redteam --replay <run-id>
+uv run redteam --export <run-id> --format json
+uv run redteam --export <run-id> --format markdown --output ./report.md
+uv run redteam --compare <run-a> <run-b>
+uv run redteam-api
 ```
 
 Exports are written to `~/.redteaming-ai/exports/` by default when `--output` is not provided.
 Replay and export now consume the stored report artifact when available, which keeps the CLI aligned with persisted findings and other structured report data.
-`redteam --auto` accepts `--target-type`, `--target-provider`, `--target-model`, `--target-config '<json>'`, `--attack-categories <csv>`, `--attack-strategy corpus|mutate|fuzz`, `--attack-budget <int>`, and `--seed <int>` for packaged assessment runs.
+`uv run redteam --auto` accepts `--target-type`, `--target-provider`, `--target-model`, `--target-config '<json>'`, `--attack-categories <csv>`, `--attack-strategy corpus|mutate|fuzz`, `--attack-budget <int>`, and `--seed <int>` for packaged assessment runs.
 
 Hosted chat example with declarative capability metadata:
 
 ```bash
-redteam --auto \
+uv run redteam --auto \
   --target-type hosted_chat_model \
   --target-provider anthropic \
   --target-model claude-3-5-haiku-latest \
@@ -79,21 +77,15 @@ redteam --auto \
 You can also use the module entrypoint:
 
 ```bash
-python -m redteaming_ai --history
+uv run python -m redteaming_ai --history
 ```
 
-### Streamlit UI
+### Demo/UI Workflows (Secondary)
 
 ```bash
-pip install -r requirements.txt
-streamlit run streamlit_demo.py
-```
-
-### Backend API
-
-```bash
-pip install -e .
-redteam-api
+uv run python demo.py
+uv run python demo.py --auto
+uv run streamlit run streamlit_demo.py
 ```
 
 The API starts on `http://127.0.0.1:8000` with OpenAPI docs at `http://127.0.0.1:8000/docs`.
@@ -125,6 +117,7 @@ curl "http://127.0.0.1:8000/assessments/<run-id>/report/export?format=markdown"
 ### Configuration
 
 The application uses typed settings with fail-fast validation. All configuration is via environment variables.
+Packaged CLI, API, and hosted-model adapter flows all load a repo-local `.env` file automatically when present.
 
 **Environment Variables:**
 
@@ -137,22 +130,20 @@ The application uses typed settings with fail-fast validation. All configuration
 
 **Quick Start (mock mode - no API key needed):**
 ```bash
-export LLM_PROVIDER=mock
-python demo.py
+uv run redteam
 ```
 
 **With real provider:**
 ```bash
-cp .env.example .env
-# edit .env with your provider and API key
-python demo.py
+# create .env from .env.example and edit it with your provider and API key
+uv run redteam --auto --target-type hosted_chat_model --target-provider openai --target-model gpt-4.1
 ```
 
 ### Run Tests
 
 ```bash
-pip install -r requirements.txt
-pytest -q
+uv run pytest -q
+uv run ruff check .
 ```
 
 ## What You Can Explore Today
@@ -171,7 +162,6 @@ pytest -q
 - `src/redteaming_ai/cli.py`: packaged CLI with persisted history, replay, compare, and export
 - `src/redteaming_ai/api.py`: packaged API for assessments, reports, evidence, and exports
 - `streamlit_demo.py`: Streamlit interface
-- `quick_start.sh`: basic launcher for demo modes
 
 ## Known Limitations
 

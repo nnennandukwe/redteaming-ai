@@ -1,10 +1,22 @@
 import pytest
 
+import redteaming_ai.config as config_module
 from redteaming_ai.config import Provider, Settings, get_settings
 
 
+@pytest.fixture(autouse=True)
+def isolate_working_directory_and_env(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    for variable in (
+        "LLM_PROVIDER",
+        "MODEL_NAME",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    ):
+        monkeypatch.delenv(variable, raising=False)
+
+
 def test_provider_required(monkeypatch):
-    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     with pytest.raises(ValueError) as exc_info:
         Settings()
     assert "LLM_PROVIDER is not set" in str(exc_info.value)
@@ -59,3 +71,21 @@ def test_get_settings_returns_settings(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     settings = get_settings()
     assert isinstance(settings, Settings)
+
+
+def test_get_settings_reads_repo_root_dotenv_from_subdirectory(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    package_dir = repo_root / "src" / "redteaming_ai"
+    working_dir = repo_root / "nested" / "workdir"
+    package_dir.mkdir(parents=True)
+    working_dir.mkdir(parents=True)
+    (repo_root / "pyproject.toml").write_text("[project]\nname='redteaming-ai'\n")
+    (repo_root / ".env").write_text("LLM_PROVIDER=mock\nMODEL_NAME=repo-root-model\n")
+    (working_dir / ".env").write_text("LLM_PROVIDER=openai\nMODEL_NAME=cwd-model\n")
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setattr(config_module, "__file__", str(package_dir / "config.py"))
+
+    settings = get_settings()
+
+    assert settings.provider == Provider.MOCK
+    assert settings.model_name == "repo-root-model"

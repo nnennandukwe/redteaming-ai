@@ -455,21 +455,21 @@ def _write_export(report: Dict[str, Any], run_id: str, export_format: str, outpu
 
 def _print_usage():
     print("Usage:")
-    print("  redteam                     # Interactive demo")
-    print("  redteam --quick             # 5-minute quick demo")
+    print("  uv run redteam                     # Interactive demo")
+    print("  uv run redteam --quick             # 5-minute quick demo")
     print(
-        "  redteam --auto [--target-type <type> --target-provider <provider> --target-model <model> --target-config <json> --attack-categories <csv> --attack-strategy corpus|mutate|fuzz --attack-budget <int> --seed <int>]"
+        "  uv run redteam --auto [--target-type <type> --target-provider <provider> --target-model <model> --target-config <json> --attack-categories <csv> --attack-strategy corpus|mutate|fuzz --attack-budget <int> --seed <int>]"
     )
-    print("  redteam --history           # List recent runs")
-    print("  redteam --replay <id>       # Replay a specific run")
-    print("  redteam --export <id> --format json|markdown [--output <path>]")
-    print("  redteam --compare <a> <b>   # Compare two runs")
+    print("  uv run redteam --history           # List recent runs")
+    print("  uv run redteam --replay <id>       # Replay a specific run")
+    print("  uv run redteam --export <id> --format json|markdown [--output <path>]")
+    print("  uv run redteam --compare <a> <b>   # Compare two runs")
     print("")
     print("Equivalent module entrypoint:")
-    print("  python -m redteaming_ai [args]")
+    print("  uv run python -m redteaming_ai [args]")
     print("")
     print("For the lightweight demo script, use:")
-    print("  python demo.py [--quick|--auto]")
+    print("  uv run python demo.py [--quick|--auto]")
 
 
 def _open_storage() -> RunStorage:
