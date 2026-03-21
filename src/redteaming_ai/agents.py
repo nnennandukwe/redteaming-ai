@@ -65,6 +65,16 @@ class RedTeamAgent:
             raise ValueError(f"{self.name} requires an evaluator")
         return run_evaluator(self.evaluator, payload, response)
 
+    @classmethod
+    def _json_safe(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, dict):
+            return {str(key): cls._json_safe(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [cls._json_safe(item) for item in value]
+        return str(value)
+
     def _build_attack_result(
         self,
         *,
@@ -73,9 +83,11 @@ class RedTeamAgent:
         response: Dict[str, Any],
         evaluation: EvaluationResult,
     ) -> AttackResult:
-        response_metadata = {
+        response_metadata = self._json_safe(
+            {
             key: value for key, value in response.items() if key != "message"
-        }
+            }
+        )
         tool_trace: List[Dict[str, Any]] = []
         if response.get("tool_used"):
             tool_trace.append(
@@ -99,9 +111,10 @@ class RedTeamAgent:
             evaluator={
                 "decision": "confirmed" if evaluation.success else "rejected",
                 "rationale": evaluation.rationale,
+                "outcome_category": evaluation.outcome_category,
                 "evidence_tags": list(dict.fromkeys(evaluation.evidence_tags)),
                 "finding_keys": list(dict.fromkeys(evaluation.finding_keys)),
-                "evidence": evaluation.evidence,
+                "evidence": self._json_safe(evaluation.evidence),
             },
         )
 
@@ -272,11 +285,15 @@ class RedTeamOrchestrator:
             data_exfiltration_evaluator or DataExfiltrationEvaluator()
         )
         self.jailbreak_evaluator = jailbreak_evaluator or JailbreakEvaluator()
-        self.agents = agents or [
-            PromptInjectionAgent(evaluator=self.prompt_injection_evaluator),
-            DataExfiltrationAgent(evaluator=self.data_exfiltration_evaluator),
-            JailbreakAgent(evaluator=self.jailbreak_evaluator),
-        ]
+        self.agents = (
+            list(agents)
+            if agents is not None
+            else [
+                PromptInjectionAgent(evaluator=self.prompt_injection_evaluator),
+                DataExfiltrationAgent(evaluator=self.data_exfiltration_evaluator),
+                JailbreakAgent(evaluator=self.jailbreak_evaluator),
+            ]
+        )
         self.all_results = []
         self.storage = storage
         self._current_run_id: Optional[str] = run_id

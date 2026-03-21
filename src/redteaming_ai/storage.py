@@ -104,6 +104,9 @@ class RunStorage:
             return json.dumps(parsed, sort_keys=True)
         return json.dumps(target_config or {}, sort_keys=True)
 
+    def _json_dumps(self, value: Any, *, sort_keys: bool = False) -> str:
+        return json.dumps(value, sort_keys=sort_keys, default=str)
+
     def _default_target_name(
         self,
         provider: Optional[str],
@@ -727,10 +730,10 @@ class RunStorage:
                 payload,
                 response,
                 1 if success else 0,
-                json.dumps(data_leaked),
-                json.dumps(response_metadata or {}, sort_keys=True),
-                json.dumps(tool_trace or []),
-                json.dumps(evaluator or {}, sort_keys=True),
+                self._json_dumps(data_leaked),
+                self._json_dumps(response_metadata or {}, sort_keys=True),
+                self._json_dumps(tool_trace or []),
+                self._json_dumps(evaluator or {}, sort_keys=True),
                 datetime.now().isoformat(),
             ),
         )
