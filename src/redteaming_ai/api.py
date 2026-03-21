@@ -59,11 +59,15 @@ def create_app(
         payload: AssessmentCreateRequest,
         service: AssessmentService = Depends(get_assessment_service),
     ) -> AssessmentResponse:
-        run = service.create_assessment(
-            target_provider=payload.target_provider,
-            target_model=payload.target_model,
-            target_config=payload.target_config,
-        )
+        try:
+            run = service.create_assessment(
+                target_type=payload.target_type,
+                target_provider=payload.target_provider,
+                target_model=payload.target_model,
+                target_config=payload.target_config,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return AssessmentResponse(**run)
 
     @app.get("/assessments/{run_id}", response_model=AssessmentResponse)

@@ -1,5 +1,6 @@
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +54,7 @@ def test_cli_help_mentions_packaged_entrypoints(monkeypatch, capsys):
     captured = capsys.readouterr().out
     assert "redteam --history" in captured
     assert "redteam --compare <a> <b>" in captured
+    assert "--target-type <type>" in captured
     assert "redteam --export <id> --format json|markdown [--output <path>]" in captured
     assert "python -m redteaming_ai [args]" in captured
 
@@ -306,26 +308,111 @@ def test_cli_auto_closes_storage_on_failure(monkeypatch):
 
         def __init__(self):
             self.closed = False
+            self.created = None
             SpyStorage.last_instance = self
 
         def init_db(self):
             return None
 
+        def create_run(self, **kwargs):
+            self.created = kwargs
+            return "run-auto"
+
         def close(self):
             self.closed = True
 
     class FailingOrchestrator:
-        def __init__(self, storage):
+        def __init__(self, storage, run_id=None):
             self.storage = storage
+            self.run_id = run_id
 
         def run_attack_suite(self, _target):
             raise RuntimeError("boom")
 
+    def fake_resolve(spec):
+        return spec, SimpleNamespace(
+            process_message=lambda _payload: {"message": "ok"},
+            get_system_info=lambda: {"llm_provider": "mock", "model_name": None},
+        )
+
     monkeypatch.setattr(cli, "RunStorage", SpyStorage)
     monkeypatch.setattr(cli, "RedTeamOrchestrator", FailingOrchestrator)
+    monkeypatch.setattr(cli, "resolve_target_spec", fake_resolve)
     monkeypatch.setattr(sys, "argv", ["redteam", "--auto"])
 
     with pytest.raises(RuntimeError, match="boom"):
         cli.main()
 
     assert SpyStorage.last_instance.closed is True
+    assert SpyStorage.last_instance.created["target_type"] == "vulnerable_llm_app"
+
+
+def test_cli_auto_accepts_hosted_target_flags(monkeypatch):
+    class SpyStorage:
+        last_instance = None
+
+        def __init__(self):
+            self.closed = False
+            self.created = None
+            SpyStorage.last_instance = self
+
+        def init_db(self):
+            return None
+
+        def create_run(self, **kwargs):
+            self.created = kwargs
+            return "run-hosted"
+
+        def close(self):
+            self.closed = True
+
+    class SpyOrchestrator:
+        last_target = None
+
+        def __init__(self, storage, run_id=None):
+            self.storage = storage
+            self.run_id = run_id
+
+        def run_attack_suite(self, target):
+            SpyOrchestrator.last_target = target
+            return {"summary": {"total_attacks": 0, "successful_attacks": 0, "success_rate": 0.0}}
+
+    def fake_resolve(spec):
+        return spec, SimpleNamespace(
+            process_message=lambda _payload: {"message": "ok"},
+            get_system_info=lambda: {"llm_provider": "openai", "model_name": "gpt-4.1"},
+        )
+
+    monkeypatch.setattr(cli, "RunStorage", SpyStorage)
+    monkeypatch.setattr(cli, "RedTeamOrchestrator", SpyOrchestrator)
+    monkeypatch.setattr(cli, "resolve_target_spec", fake_resolve)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "redteam",
+            "--auto",
+            "--target-type",
+            "hosted_chat_model",
+            "--target-provider",
+            "openai",
+            "--target-model",
+            "gpt-4.1",
+            "--target-config",
+            json.dumps(
+                {
+                    "system_prompt": "audit me",
+                    "capabilities": {"tool_use": True},
+                    "constraints": ["no-pii"],
+                }
+            ),
+        ],
+    )
+
+    cli.main()
+
+    assert SpyStorage.last_instance.closed is True
+    assert SpyStorage.last_instance.created["target_type"] == "hosted_chat_model"
+    assert SpyStorage.last_instance.created["target_provider"] == "openai"
+    assert SpyStorage.last_instance.created["target_model"] == "gpt-4.1"
+    assert SpyStorage.last_instance.created["target_config"]["capabilities"]["tool_use"] is True

@@ -34,10 +34,35 @@ def test_create_run(storage):
     assert len(run_id) == 36
 
     run = storage.get_run(run_id)
+    assert run["target_type"] == "vulnerable_llm_app"
     assert run["target_provider"] == "mock"
     assert run["target_config"] == {"test": True}
     assert run["status"] == "running"
     assert run["queued_at"] == run["started_at"]
+
+
+def test_create_run_preserves_explicit_target_type_and_config(storage):
+    run_id = storage.create_run(
+        target_provider="openai",
+        target_model="gpt-4.1",
+        target_config={
+            "system_prompt": "audit me",
+            "capabilities": {"tool_use": True, "memory": False},
+            "constraints": ["no-pii"],
+        },
+        target_type="hosted_chat_model",
+    )
+
+    run = storage.get_run(run_id)
+    evidence = storage.get_run_evidence(run_id)
+
+    assert run["target_type"] == "hosted_chat_model"
+    assert run["target_provider"] == "openai"
+    assert run["target_model"] == "gpt-4.1"
+    assert run["target_config"]["capabilities"]["tool_use"] is True
+    assert run["target_config"]["constraints"] == ["no-pii"]
+    assert evidence["target_type"] == "hosted_chat_model"
+    assert evidence["target_config"]["system_prompt"] == "audit me"
 
 
 def test_record_attempt_persists_metadata(storage):

@@ -17,6 +17,11 @@ from rich.prompt import Confirm, Prompt
 from rich.syntax import Syntax
 from rich.table import Table
 
+from redteaming_ai.adapters import (
+    DEFAULT_TARGET_TYPE,
+    normalize_target_spec,
+    resolve_target_spec,
+)
 from redteaming_ai.agents import RedTeamOrchestrator
 from redteaming_ai.storage import RunStorage
 from redteaming_ai.target import VulnerableLLMApp
@@ -243,6 +248,8 @@ def _report_to_markdown(report: Dict[str, Any]) -> str:
         lines.append(f"- Run ID: `{report['id']}`")
     if report.get("target_name"):
         lines.append(f"- Target: `{report['target_name']}`")
+    if report.get("target_type"):
+        lines.append(f"- Target Type: `{report['target_type']}`")
     if report.get("target_provider") or report.get("target_model"):
         provider = report.get("target_provider") or "unknown"
         model = report.get("target_model") or "unknown"
@@ -343,7 +350,7 @@ def _print_usage():
     print("Usage:")
     print("  redteam                     # Interactive demo")
     print("  redteam --quick             # 5-minute quick demo")
-    print("  redteam --auto              # Automated attack only (saves to history)")
+    print("  redteam --auto [--target-type <type> --target-provider <provider> --target-model <model> --target-config <json>]")
     print("  redteam --history           # List recent runs")
     print("  redteam --replay <id>       # Replay a specific run")
     print("  redteam --export <id> --format json|markdown [--output <path>]")
@@ -360,6 +367,67 @@ def _open_storage() -> RunStorage:
     storage = RunStorage()
     storage.init_db()
     return storage
+
+
+def _get_option_value(args: list[str], option: str) -> Optional[str]:
+    if option not in args:
+        return None
+    option_index = args.index(option)
+    if option_index + 1 >= len(args):
+        console.print(f"[red]Error: {option} requires a value[/red]")
+        sys.exit(1)
+    return args[option_index + 1]
+
+
+def _parse_target_config_arg(raw_value: Optional[str]) -> Dict[str, Any]:
+    if not raw_value:
+        return {}
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]Error: --target-config must be valid JSON ({exc})[/red]")
+        sys.exit(1)
+    if not isinstance(parsed, dict):
+        console.print("[red]Error: --target-config must decode to a JSON object[/red]")
+        sys.exit(1)
+    return parsed
+
+
+def _build_auto_target_spec(args: list[str]):
+    target_type = _get_option_value(args, "--target-type") or DEFAULT_TARGET_TYPE
+    target_provider = _get_option_value(args, "--target-provider")
+    target_model = _get_option_value(args, "--target-model")
+    target_config = _parse_target_config_arg(_get_option_value(args, "--target-config"))
+
+    try:
+        spec = normalize_target_spec(
+            target_type=target_type,
+            target_provider=target_provider,
+            target_model=target_model,
+            target_config=target_config,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        sys.exit(1)
+
+    return spec
+
+
+def _run_packaged_assessment(storage: RunStorage, target_spec) -> Dict[str, Any]:
+    try:
+        resolved_spec, target_runtime = resolve_target_spec(target_spec)
+    except ValueError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        sys.exit(1)
+
+    run_id = storage.create_run(
+        target_type=resolved_spec.target_type,
+        target_provider=resolved_spec.target_provider,
+        target_model=resolved_spec.target_model,
+        target_config=resolved_spec.target_config,
+    )
+    orchestrator = RedTeamOrchestrator(storage=storage, run_id=run_id)
+    return orchestrator.run_attack_suite(target_runtime)
 
 
 def _render_history(storage: RunStorage):
@@ -413,6 +481,7 @@ def _render_replay(storage: RunStorage, run_id: str):
         Panel.fit(
             f"[bold]Run Replay[/bold]\n"
             f"ID: {run_id}\n"
+            f"Target Type: {run['target_type']}\n"
             f"Provider: {run['target_provider']}\n"
             f"Model: {run['target_model'] or 'unknown'}\n"
             f"Date: {_display_timestamp(run)}",
@@ -864,6 +933,7 @@ def main():
             return
 
         if arg == "--auto":
+            target_spec = _build_auto_target_spec(sys.argv[2:])
             console.print(
                 Panel.fit(
                     "[bold red]🚨 RED TEAM ATTACK SUITE INITIATED 🚨[/bold red]\n"
@@ -873,9 +943,7 @@ def main():
             )
             storage = _open_storage()
             try:
-                target = VulnerableLLMApp()
-                orchestrator = RedTeamOrchestrator(storage=storage)
-                orchestrator.run_attack_suite(target)
+                _run_packaged_assessment(storage, target_spec)
             finally:
                 storage.close()
             return

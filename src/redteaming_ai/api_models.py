@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class AssessmentCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    target_type: str = "vulnerable_llm_app"
     target_provider: str = "mock"
     target_model: Optional[str] = None
     target_config: Dict[str, Any] = Field(default_factory=dict)
@@ -21,6 +22,7 @@ class AssessmentSummaryResponse(BaseModel):
 class AssessmentResponse(BaseModel):
     id: str
     target_id: Optional[str] = None
+    target_type: Optional[str] = None
     target_provider: Optional[str] = None
     target_model: Optional[str] = None
     target_config: Dict[str, Any] = Field(default_factory=dict)
@@ -72,8 +74,10 @@ class EvidenceAttemptResponse(BaseModel):
 class EvidenceResponse(BaseModel):
     id: str
     target_id: Optional[str] = None
+    target_type: Optional[str] = None
     target_provider: Optional[str] = None
     target_model: Optional[str] = None
+    target_config: Dict[str, Any] = Field(default_factory=dict)
     status: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
@@ -85,6 +89,7 @@ class EvidenceResponse(BaseModel):
 class ReportResponse(BaseModel):
     id: str
     target_id: Optional[str] = None
+    target_type: Optional[str] = None
     target_provider: Optional[str] = None
     target_model: Optional[str] = None
     target_config: Dict[str, Any] = Field(default_factory=dict)

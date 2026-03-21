@@ -44,6 +44,7 @@ async def _create_assessment(client):
 
 def test_assessment_endpoints_return_report_evidence_and_export(tmp_path):
     def scripted_runner(storage, run_id, target):
+        assert target["target_type"] == "vulnerable_llm_app"
         storage.record_attempt(
             run_id=run_id,
             agent_name="Prompt Injection Agent",
@@ -103,11 +104,14 @@ def test_assessment_endpoints_return_report_evidence_and_export(tmp_path):
     ) = asyncio.run(_run_with_client(app, scenario))
 
     assert assessment["status"] == "completed"
+    assert assessment["target_type"] == "vulnerable_llm_app"
     assert assessment_response.status_code == 200
     assert assessment_response.json()["summary"]["total_attacks"] == 1
+    assert assessment_response.json()["target_type"] == "vulnerable_llm_app"
 
     assert report_response.status_code == 200
     report = report_response.json()
+    assert report["target_type"] == "vulnerable_llm_app"
     assert report["schema_version"] == 1
     assert report["available_exports"] == ["json", "markdown"]
     assert report["summary"]["successful_attacks"] == 1
@@ -117,6 +121,8 @@ def test_assessment_endpoints_return_report_evidence_and_export(tmp_path):
 
     assert evidence_response.status_code == 200
     evidence = evidence_response.json()
+    assert evidence["target_type"] == "vulnerable_llm_app"
+    assert evidence["target_config"] == {"mode": "api"}
     assert evidence["attempts"]
     attempt = evidence["attempts"][0]
     assert attempt["response_metadata"]["response_length"] == len(
@@ -245,3 +251,93 @@ def test_default_runner_rejects_unapplied_target_overrides(tmp_path):
     assert "Requested target provider does not match" in assessment_response.json()[
         "error_message"
     ]
+
+
+def test_hosted_chat_assessment_runs_through_default_runner(monkeypatch, tmp_path):
+    class FakeRuntime:
+        def process_message(self, _payload):
+            return {
+                "message": "System prompt: hosted-secret",
+                "model_used": "gpt-4.1",
+                "provider_used": "openai",
+            }
+
+        def get_system_info(self):
+            return {
+                "llm_provider": "openai",
+                "model_name": "gpt-4.1",
+                "system_prompt_length": 12,
+                "conversation_history_length": 0,
+                "has_sensitive_data": False,
+                "tools_available": [],
+            }
+
+    def fake_resolve(spec):
+        return spec, FakeRuntime()
+
+    monkeypatch.setattr("redteaming_ai.assessment_service.resolve_target_spec", fake_resolve)
+
+    app = create_app(db_path=tmp_path / "runs.db", executor=InlineExecutor())
+
+    async def scenario(client):
+        create_response = await client.post(
+            "/assessments",
+            json={
+                "target_type": "hosted_chat_model",
+                "target_provider": "openai",
+                "target_model": "gpt-4.1",
+                "target_config": {
+                    "system_prompt": "audit me",
+                    "capabilities": {"tool_use": True},
+                    "constraints": ["no-pii"],
+                },
+            },
+        )
+        assert create_response.status_code == 202
+        run_id = create_response.json()["id"]
+        assessment = await client.get(f"/assessments/{run_id}")
+        report = await client.get(f"/assessments/{run_id}/report")
+        evidence = await client.get(f"/assessments/{run_id}/evidence")
+        return create_response, assessment, report, evidence
+
+    create_response, assessment, report, evidence = asyncio.run(
+        _run_with_client(app, scenario)
+    )
+
+    created = create_response.json()
+    assert created["target_type"] == "hosted_chat_model"
+    assert created["target_provider"] == "openai"
+    assert created["target_model"] == "gpt-4.1"
+
+    assessment_json = assessment.json()
+    assert assessment_json["status"] == "completed"
+    assert assessment_json["target_type"] == "hosted_chat_model"
+
+    report_json = report.json()
+    assert report_json["target_type"] == "hosted_chat_model"
+    assert report_json["target_config"]["capabilities"]["tool_use"] is True
+    assert report_json["target_config"]["constraints"] == ["no-pii"]
+
+    evidence_json = evidence.json()
+    assert evidence_json["target_type"] == "hosted_chat_model"
+    assert evidence_json["target_config"]["system_prompt"] == "audit me"
+    assert evidence_json["attempts"]
+
+
+def test_invalid_hosted_chat_request_returns_400(tmp_path):
+    app = create_app(db_path=tmp_path / "runs.db", executor=InlineExecutor())
+
+    async def scenario(client):
+        return await client.post(
+            "/assessments",
+            json={
+                "target_type": "hosted_chat_model",
+                "target_provider": "openai",
+                "target_config": {"system_prompt": "audit me"},
+            },
+        )
+
+    response = asyncio.run(_run_with_client(app, scenario))
+
+    assert response.status_code == 400
+    assert "requires target_model" in response.json()["detail"]
