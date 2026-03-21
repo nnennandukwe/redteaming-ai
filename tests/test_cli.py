@@ -490,6 +490,77 @@ def test_cli_auto_accepts_attack_campaign_flags(monkeypatch):
     assert SpyStorage.last_instance.created["target_config"]["capabilities"]["tool_use"] is True
 
 
+def test_cli_auto_accepts_zero_attack_budget(monkeypatch):
+    class SpyStorage:
+        last_instance = None
+
+        def __init__(self):
+            self.closed = False
+            self.created = None
+            SpyStorage.last_instance = self
+
+        def init_db(self):
+            return None
+
+        def create_run(self, **kwargs):
+            self.created = kwargs
+            return "run-zero-budget"
+
+        def close(self):
+            self.closed = True
+
+    class SpyOrchestrator:
+        last_instance = None
+
+        def __init__(self, storage, run_id=None, campaign_config=None):
+            self.storage = storage
+            self.run_id = run_id
+            self.campaign_config = campaign_config
+            SpyOrchestrator.last_instance = self
+
+        def run_attack_suite(self, _target):
+            return {
+                "summary": {
+                    "total_attacks": 0,
+                    "successful_attacks": 0,
+                    "success_rate": 0.0,
+                    "duration": 0.0,
+                }
+            }
+
+    monkeypatch.setattr(cli, "RunStorage", SpyStorage)
+    monkeypatch.setattr(cli, "RedTeamOrchestrator", SpyOrchestrator)
+    monkeypatch.setattr(
+        cli,
+        "resolve_target_spec",
+        lambda spec: (
+            spec,
+            SimpleNamespace(
+                process_message=lambda _payload: {"message": "ok"},
+                get_system_info=lambda: {"llm_provider": "mock", "model_name": None},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "redteam",
+            "--auto",
+            "--attack-strategy",
+            "fuzz",
+            "--attack-budget",
+            "0",
+        ],
+    )
+
+    cli.main()
+
+    assert SpyStorage.last_instance.closed is True
+    assert SpyStorage.last_instance.created["campaign_config"]["attack_budget"] == 0
+    assert SpyOrchestrator.last_instance.campaign_config["attack_budget"] == 0
+
+
 def test_cli_auto_closes_storage_on_failure(monkeypatch):
     class SpyStorage:
         last_instance = None

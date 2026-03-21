@@ -541,8 +541,8 @@ def _parse_optional_int(raw_value: Optional[str], option: str) -> Optional[int]:
     except ValueError:
         console.print(f"[red]Error: {option} must be an integer[/red]")
         sys.exit(1)
-    if option == "--attack-budget" and value <= 0:
-        console.print("[red]Error: --attack-budget must be greater than 0[/red]")
+    if option == "--attack-budget" and value < 0:
+        console.print("[red]Error: --attack-budget must be greater than or equal to 0[/red]")
         sys.exit(1)
     return value
 
