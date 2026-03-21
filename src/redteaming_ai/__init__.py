@@ -11,14 +11,24 @@ from redteaming_ai.agents import (
     RedTeamOrchestrator,
 )
 from redteaming_ai.config import Provider, Settings, get_settings
+from redteaming_ai.evaluators import (
+    DataExfiltrationEvaluator,
+    EvaluationResult,
+    JailbreakEvaluator,
+    PromptInjectionEvaluator,
+)
 from redteaming_ai.storage import RunStorage
 from redteaming_ai.target import VulnerableLLMApp
 
 __all__ = [
     "AttackResult",
     "DataExfiltrationAgent",
+    "DataExfiltrationEvaluator",
+    "EvaluationResult",
     "JailbreakAgent",
+    "JailbreakEvaluator",
     "PromptInjectionAgent",
+    "PromptInjectionEvaluator",
     "Provider",
     "RedTeamAgent",
     "RedTeamOrchestrator",
