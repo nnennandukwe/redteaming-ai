@@ -21,7 +21,11 @@ def default_assessment_runner(
         target_config=target.get("target_config"),
     )
     _, target_app = resolve_target_spec(spec)
-    orchestrator = RedTeamOrchestrator(storage=storage, run_id=run_id)
+    orchestrator = RedTeamOrchestrator(
+        storage=storage,
+        run_id=run_id,
+        campaign_config=target.get("campaign_config"),
+    )
     orchestrator.run_attack_suite(target_app)
 
 
@@ -59,6 +63,7 @@ class AssessmentService:
         target_model: Optional[str] = None,
         target_type: str = "vulnerable_llm_app",
         target_config: Optional[Dict[str, Any]] = None,
+        campaign_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         spec = normalize_target_spec(
             target_type=target_type,
@@ -73,11 +78,14 @@ class AssessmentService:
                 target_provider=spec.target_provider,
                 target_model=spec.target_model,
                 target_config=spec.target_config,
+                campaign_config=campaign_config,
             )
         finally:
             storage.close()
 
-        self.executor.submit(self._execute_assessment, run_id, spec.to_dict())
+        runner_target = spec.to_dict()
+        runner_target["campaign_config"] = campaign_config
+        self.executor.submit(self._execute_assessment, run_id, runner_target)
         run = self.get_assessment(run_id)
         if not run:
             raise ValueError(f"Run {run_id} was not created")
@@ -114,6 +122,8 @@ class AssessmentService:
             evidence["target_provider"] = run.get("target_provider")
             evidence["target_model"] = run.get("target_model")
             evidence["target_config"] = run.get("target_config", {})
+            if "campaign" not in evidence:
+                evidence["campaign"] = self._campaign_from_run(run)
             return evidence
         finally:
             storage.close()
@@ -161,4 +171,12 @@ class AssessmentService:
             "duration_seconds": run.get("duration_seconds"),
             "error_message": run.get("error_message"),
             "summary": summary,
+            "campaign": self._campaign_from_run(run),
         }
+
+    @staticmethod
+    def _campaign_from_run(run: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        report = run.get("report") or {}
+        if report.get("campaign") is not None:
+            return report.get("campaign")
+        return run.get("campaign_config")

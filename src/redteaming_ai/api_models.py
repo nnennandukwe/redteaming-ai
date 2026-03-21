@@ -10,6 +10,21 @@ class AssessmentCreateRequest(BaseModel):
     target_provider: str = "mock"
     target_model: Optional[str] = None
     target_config: Dict[str, Any] = Field(default_factory=dict)
+    attack_categories: List[str] = Field(default_factory=list)
+    attack_strategy: Literal["corpus", "mutate", "fuzz"] = "corpus"
+    attack_budget: Optional[int] = None
+    seed: int = 0
+
+
+class CampaignMetadataResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: Literal["corpus", "mutate", "fuzz"] = "corpus"
+    categories: List[str] = Field(default_factory=list)
+    attack_budget: Optional[int] = None
+    seed: int = 0
+    generated_attacks: Optional[int] = None
+    coverage: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
 class AssessmentSummaryResponse(BaseModel):
@@ -32,6 +47,7 @@ class AssessmentResponse(BaseModel):
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
     summary: Optional[AssessmentSummaryResponse] = None
+    campaign: Optional[CampaignMetadataResponse] = None
 
 
 class FindingEvidenceResponse(BaseModel):
@@ -84,6 +100,7 @@ class EvidenceResponse(BaseModel):
     duration_seconds: Optional[float] = None
     error_message: Optional[str] = None
     attempts: List[EvidenceAttemptResponse] = Field(default_factory=list)
+    campaign: Optional[CampaignMetadataResponse] = None
 
 
 class ReportResponse(BaseModel):
@@ -107,3 +124,4 @@ class ReportResponse(BaseModel):
     findings: List[FindingResponse] = Field(default_factory=list)
     results: List[EvidenceAttemptResponse] = Field(default_factory=list)
     available_exports: List[str] = Field(default_factory=list)
+    campaign: Optional[CampaignMetadataResponse] = None

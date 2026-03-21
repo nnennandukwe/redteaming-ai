@@ -7,7 +7,7 @@ Run this for your presentation!
 import json
 import sys
 import time
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,6 +27,19 @@ from redteaming_ai.storage import RunStorage
 from redteaming_ai.target import VulnerableLLMApp
 
 console = Console()
+
+BUILT_IN_ATTACK_CATEGORIES = (
+    "prompt_injection",
+    "data_exfiltration",
+    "jailbreak",
+)
+ALLOWED_ATTACK_STRATEGIES = {"corpus", "mutate", "fuzz"}
+
+
+@dataclass(frozen=True)
+class AutoRunSpec:
+    target_spec: Any
+    campaign: Dict[str, Any]
 
 
 def preview_text(text: str, limit: int = 200) -> str:
@@ -83,9 +96,21 @@ def _normalize_report_artifact(
             "completed_at",
             "duration_seconds",
             "error_message",
+            "target_config",
         ):
             if key not in normalized and run.get(key) is not None:
                 normalized[key] = run.get(key)
+
+        campaign_config = run.get("campaign_config")
+        if isinstance(campaign_config, dict):
+            normalized.setdefault("campaign", dict(campaign_config))
+
+        target_config = run.get("target_config")
+        if isinstance(target_config, dict):
+            normalized.setdefault("target_config", dict(target_config))
+            campaign = target_config.get("campaign")
+            if isinstance(campaign, dict):
+                normalized.setdefault("campaign", dict(campaign))
 
     normalized.setdefault("summary", {})
     normalized.setdefault("attacks_by_type", {})
@@ -95,6 +120,57 @@ def _normalize_report_artifact(
     normalized.setdefault("results", [])
     normalized.setdefault("available_exports", ["json", "markdown"])
     return normalized
+
+
+def _campaign_from_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    campaign = report.get("campaign")
+    if isinstance(campaign, dict):
+        return dict(campaign)
+
+    target_config = report.get("target_config")
+    if isinstance(target_config, dict):
+        campaign = target_config.get("campaign")
+        if isinstance(campaign, dict):
+            return dict(campaign)
+
+    return {}
+
+
+def _format_campaign_value(value: Any) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "—"
+    return str(value)
+
+
+def _campaign_lines(campaign: Dict[str, Any]) -> list[str]:
+    if not campaign:
+        return []
+
+    strategy = campaign.get("attack_strategy") or campaign.get("strategy")
+    categories = campaign.get("attack_categories") or campaign.get("categories") or []
+    lines = [
+        f"  Strategy: {_format_campaign_value(strategy)}",
+        f"  Categories: {_format_campaign_value(categories)}",
+        f"  Seed: {_format_campaign_value(campaign.get('seed'))}",
+        f"  Attack Budget: {_format_campaign_value(campaign.get('attack_budget'))}",
+    ]
+    if campaign.get("generated_attacks") is not None:
+        lines.append(
+            f"  Generated Attacks: {_format_campaign_value(campaign.get('generated_attacks'))}"
+        )
+
+    coverage = campaign.get("coverage")
+    if isinstance(coverage, dict) and coverage:
+        lines.append("  Coverage:")
+        for attack_type, stats in coverage.items():
+            if isinstance(stats, dict):
+                stat_text = ", ".join(f"{key}={value}" for key, value in stats.items())
+            else:
+                stat_text = _format_campaign_value(stats)
+            lines.append(f"    {attack_type}: {stat_text}")
+    return lines
 
 
 def _format_number(value: Any, precision: str, default: str) -> str:
@@ -140,6 +216,12 @@ def _report_summary_lines(report: Dict[str, Any]) -> None:
 
     if report.get("schema_version") is not None:
         console.print(f"  Schema Version: {report['schema_version']}")
+
+    campaign = _campaign_from_report(report)
+    if campaign:
+        console.print("\n[bold cyan]Campaign:[/bold cyan]")
+        for line in _campaign_lines(campaign):
+            console.print(line)
 
 
 def _report_breakdown_lines(report: Dict[str, Any]) -> None:
@@ -259,6 +341,31 @@ def _report_to_markdown(report: Dict[str, Any]) -> str:
     if report.get("schema_version") is not None:
         lines.append(f"- Schema Version: `{report['schema_version']}`")
 
+    campaign = _campaign_from_report(report)
+    if campaign:
+        lines.extend(["", "## Campaign", ""])
+        lines.append(f"- Strategy: `{_format_campaign_value(campaign.get('attack_strategy') or campaign.get('strategy'))}`")
+        lines.append(
+            f"- Categories: `{_format_campaign_value(campaign.get('attack_categories') or campaign.get('categories') or [])}`"
+        )
+        lines.append(f"- Seed: `{_format_campaign_value(campaign.get('seed'))}`")
+        lines.append(
+            f"- Attack Budget: `{_format_campaign_value(campaign.get('attack_budget'))}`"
+        )
+        if campaign.get("generated_attacks") is not None:
+            lines.append(
+                f"- Generated Attacks: `{_format_campaign_value(campaign.get('generated_attacks'))}`"
+            )
+        coverage = campaign.get("coverage")
+        if isinstance(coverage, dict) and coverage:
+            lines.append("- Coverage:")
+            for attack_type, stats in coverage.items():
+                if isinstance(stats, dict):
+                    stat_text = json.dumps(stats, sort_keys=True, default=str)
+                else:
+                    stat_text = _format_campaign_value(stats)
+                lines.append(f"  - `{attack_type}`: `{stat_text}`")
+
     lines.extend(["", "## Summary", ""])
     for label, key in (
         ("Total Attacks", "total_attacks"),
@@ -350,7 +457,9 @@ def _print_usage():
     print("Usage:")
     print("  redteam                     # Interactive demo")
     print("  redteam --quick             # 5-minute quick demo")
-    print("  redteam --auto [--target-type <type> --target-provider <provider> --target-model <model> --target-config <json>]")
+    print(
+        "  redteam --auto [--target-type <type> --target-provider <provider> --target-model <model> --target-config <json> --attack-categories <csv> --attack-strategy corpus|mutate|fuzz --attack-budget <int> --seed <int>]"
+    )
     print("  redteam --history           # List recent runs")
     print("  redteam --replay <id>       # Replay a specific run")
     print("  redteam --export <id> --format json|markdown [--output <path>]")
@@ -393,11 +502,68 @@ def _parse_target_config_arg(raw_value: Optional[str]) -> Dict[str, Any]:
     return parsed
 
 
-def _build_auto_target_spec(args: list[str]):
+def _parse_attack_categories(raw_value: Optional[str]) -> list[str]:
+    if not raw_value:
+        return list(BUILT_IN_ATTACK_CATEGORIES)
+
+    categories = [item.strip() for item in raw_value.split(",") if item.strip()]
+    if not categories:
+        console.print("[red]Error: --attack-categories requires at least one category[/red]")
+        sys.exit(1)
+
+    unknown = [category for category in categories if category not in BUILT_IN_ATTACK_CATEGORIES]
+    if unknown:
+        allowed = ", ".join(BUILT_IN_ATTACK_CATEGORIES)
+        console.print(
+            f"[red]Error: unsupported attack category(s): {', '.join(unknown)}. Allowed values: {allowed}[/red]"
+        )
+        sys.exit(1)
+
+    return list(dict.fromkeys(categories))
+
+
+def _parse_attack_strategy(raw_value: Optional[str]) -> str:
+    strategy = (raw_value or "corpus").strip().lower()
+    if strategy not in ALLOWED_ATTACK_STRATEGIES:
+        allowed = ", ".join(sorted(ALLOWED_ATTACK_STRATEGIES))
+        console.print(
+            f"[red]Error: --attack-strategy must be one of {allowed}; received {raw_value or 'unset'}[/red]"
+        )
+        sys.exit(1)
+    return strategy
+
+
+def _parse_optional_int(raw_value: Optional[str], option: str) -> Optional[int]:
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError:
+        console.print(f"[red]Error: {option} must be an integer[/red]")
+        sys.exit(1)
+    if option == "--attack-budget" and value < 0:
+        console.print("[red]Error: --attack-budget must be greater than or equal to 0[/red]")
+        sys.exit(1)
+    return value
+
+
+def _build_auto_target_spec(args: list[str]) -> AutoRunSpec:
     target_type = _get_option_value(args, "--target-type") or DEFAULT_TARGET_TYPE
     target_provider = _get_option_value(args, "--target-provider")
     target_model = _get_option_value(args, "--target-model")
     target_config = _parse_target_config_arg(_get_option_value(args, "--target-config"))
+    campaign = {
+        "attack_categories": _parse_attack_categories(
+            _get_option_value(args, "--attack-categories")
+        ),
+        "attack_strategy": _parse_attack_strategy(
+            _get_option_value(args, "--attack-strategy")
+        ),
+        "attack_budget": _parse_optional_int(
+            _get_option_value(args, "--attack-budget"), "--attack-budget"
+        ),
+        "seed": _parse_optional_int(_get_option_value(args, "--seed"), "--seed") or 0,
+    }
 
     try:
         spec = normalize_target_spec(
@@ -407,26 +573,34 @@ def _build_auto_target_spec(args: list[str]):
             target_config=target_config,
         )
     except ValueError as exc:
-        console.print(f"[red]Error: {exc}[/red]")
-        sys.exit(1)
+            console.print(f"[red]Error: {exc}[/red]")
+            sys.exit(1)
 
-    return spec
+    return AutoRunSpec(target_spec=spec, campaign=campaign)
 
 
-def _run_packaged_assessment(storage: RunStorage, target_spec) -> Dict[str, Any]:
+def _run_packaged_assessment(storage: RunStorage, auto_run: AutoRunSpec) -> Dict[str, Any]:
     try:
-        resolved_spec, target_runtime = resolve_target_spec(target_spec)
+        resolved_spec, target_runtime = resolve_target_spec(auto_run.target_spec)
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         sys.exit(1)
+
+    target_config = dict(resolved_spec.target_config)
+    target_config["campaign"] = dict(auto_run.campaign)
 
     run_id = storage.create_run(
         target_type=resolved_spec.target_type,
         target_provider=resolved_spec.target_provider,
         target_model=resolved_spec.target_model,
-        target_config=resolved_spec.target_config,
+        target_config=target_config,
+        campaign_config=auto_run.campaign,
     )
-    orchestrator = RedTeamOrchestrator(storage=storage, run_id=run_id)
+    orchestrator = RedTeamOrchestrator(
+        storage=storage,
+        run_id=run_id,
+        campaign_config=auto_run.campaign,
+    )
     return orchestrator.run_attack_suite(target_runtime)
 
 
@@ -727,9 +901,9 @@ class RedTeamDemo:
         """Run full automated red team assessment"""
         console.print(Panel("[bold red]5️⃣  AUTOMATED RED TEAM ASSESSMENT[/bold red]"))
 
-        console.print("[yellow]This runs the demo's fixed attack suite.[/yellow]")
+        console.print("[yellow]This runs the demo's managed corpus-driven attack campaign.[/yellow]")
         console.print(
-            "[dim]Payloads include prompt injection, data exfiltration, and jailbreak probes.[/dim]\n"
+            "[dim]Payloads are generated from the managed corpus with seeded strategies.[/dim]\n"
         )
 
         if Confirm.ask("[cyan]Run full automated attack suite?[/cyan]", default=True):
@@ -933,7 +1107,7 @@ def main():
             return
 
         if arg == "--auto":
-            target_spec = _build_auto_target_spec(sys.argv[2:])
+            auto_run = _build_auto_target_spec(sys.argv[2:])
             console.print(
                 Panel.fit(
                     "[bold red]🚨 RED TEAM ATTACK SUITE INITIATED 🚨[/bold red]\n"
@@ -943,7 +1117,7 @@ def main():
             )
             storage = _open_storage()
             try:
-                _run_packaged_assessment(storage, target_spec)
+                _run_packaged_assessment(storage, auto_run)
             finally:
                 storage.close()
             return

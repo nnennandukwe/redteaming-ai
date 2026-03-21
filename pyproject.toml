@@ -47,6 +47,11 @@ redteam-api = "redteaming_ai.api:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/redteaming_ai"]
 
+[tool.hatch.build]
+include = [
+    "src/redteaming_ai/**/*.json",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
