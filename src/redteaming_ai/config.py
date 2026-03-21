@@ -8,6 +8,7 @@ Mock mode must be explicitly selected via LLM_PROVIDER=mock.
 from enum import Enum
 from typing import Optional
 
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -77,10 +78,18 @@ class Settings(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+def load_environment() -> None:
+    """Load a repo-local .env file into the process environment when present."""
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        load_dotenv(dotenv_path, override=False)
+
+
 def get_settings() -> Settings:
     """Load and validate settings from environment.
 
     Raises:
         ValueError: If LLM_PROVIDER is not set, or if provider is non-mock and required credentials are missing.
     """
+    load_environment()
     return Settings()

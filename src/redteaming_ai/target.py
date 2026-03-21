@@ -12,11 +12,7 @@ import re
 from datetime import datetime
 from typing import Dict, Optional
 
-from dotenv import load_dotenv
-
 from redteaming_ai.config import Provider, get_settings
-
-load_dotenv()
 
 
 class VulnerableLLMApp:

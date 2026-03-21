@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
+from redteaming_ai.config import load_environment
 from redteaming_ai.target import VulnerableLLMApp
 
 DEFAULT_TARGET_TYPE = "vulnerable_llm_app"
@@ -151,6 +152,8 @@ class HostedChatModelRuntime:
         self._client = self._build_client()
 
     def _build_client(self) -> Any:
+        load_environment()
+
         if self.provider == "openai":
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:

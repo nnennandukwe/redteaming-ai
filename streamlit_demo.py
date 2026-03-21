@@ -1,6 +1,6 @@
 """
 Streamlit Web Interface for Red Team Demo
-Run with: streamlit run streamlit_demo.py
+Run with: uv run streamlit run streamlit_demo.py
 """
 
 
