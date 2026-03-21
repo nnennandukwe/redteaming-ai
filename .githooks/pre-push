@@ -1,0 +1,13 @@
+#!/bin/bash
+# Pre-push hook to run tests
+
+echo "Running tests before push..."
+
+python3 -m pytest -q
+
+if [ $? -ne 0 ]; then
+    echo "Tests failed! Fix failures before pushing."
+    exit 1
+fi
+
+echo "All tests passed!"

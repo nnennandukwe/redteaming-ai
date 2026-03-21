@@ -28,7 +28,7 @@ The codebase currently centers on:
 
 - A general-purpose red-teaming platform
 - A rigorous evaluation harness for real-world LLM systems
-- A service with persistence, APIs, benchmark history, or evidence-backed reporting
+- A service with multi-user APIs, benchmark dashboards, or production-grade evidence workflows
 
 ## Quick Start
 
@@ -44,6 +44,22 @@ python demo.py
 ```bash
 pip install -r requirements.txt
 python demo.py --auto
+```
+
+### Persisted CLI Workflows
+
+```bash
+pip install -e .
+redteam --auto
+redteam --history
+redteam --replay <run-id>
+redteam --compare <run-a> <run-b>
+```
+
+You can also use the module entrypoint:
+
+```bash
+python -m redteaming_ai --history
 ```
 
 ### Streamlit UI
@@ -99,6 +115,7 @@ pytest -q
 - `vulnerable_app.py`: intentionally vulnerable demo target
 - `red_team_agents.py`: attack payloads, orchestration, and reporting logic
 - `demo.py`: interactive CLI demo
+- `src/redteaming_ai/cli.py`: packaged CLI with persisted history, replay, and compare
 - `streamlit_demo.py`: Streamlit interface
 - `quick_start.sh`: basic launcher for demo modes
 
@@ -108,7 +125,7 @@ These are current limitations, not hidden gotchas:
 
 - The demo target is synthetic and intentionally insecure.
 - Much of the current attack execution and scoring is heuristic/scripted.
-- There is no persistent run storage or historical comparison yet.
+- Persisted history is currently centered on the packaged CLI (`redteam` / `python -m redteaming_ai`), not every demo/UI entrypoint.
 - There is no backend API or target adapter layer yet.
 - The reporting is useful for demos, not yet strong enough for serious assessments.
 
@@ -138,4 +155,3 @@ The demo uses synthetic placeholder secrets and synthetic PII-like data. Even so
 
 - [OWASP Top 10 for LLM Applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
 - [Prompt Injection Primer](https://github.com/jthack/PIPE)
-
