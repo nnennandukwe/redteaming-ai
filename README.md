@@ -51,6 +51,7 @@ python demo.py --auto
 ```bash
 pip install -e .
 redteam --auto
+redteam --auto --target-type hosted_chat_model --target-provider openai --target-model gpt-4.1
 redteam --history
 redteam --replay <run-id>
 redteam --export <run-id> --format json
@@ -60,6 +61,17 @@ redteam --compare <run-a> <run-b>
 
 Exports are written to `~/.redteaming-ai/exports/` by default when `--output` is not provided.
 Replay and export now consume the stored report artifact when available, which keeps the CLI aligned with persisted findings and other structured report data.
+`redteam --auto` accepts `--target-type`, `--target-provider`, `--target-model`, and `--target-config '<json>'` for packaged assessment runs.
+
+Hosted chat example with declarative capability metadata:
+
+```bash
+redteam --auto \
+  --target-type hosted_chat_model \
+  --target-provider anthropic \
+  --target-model claude-3-5-haiku-latest \
+  --target-config '{"system_prompt":"You are a support assistant.","capabilities":{"tool_use":false,"memory":false,"retrieval":true,"policy_layer":true},"constraints":["no-pii"]}'
+```
 
 You can also use the module entrypoint:
 
@@ -82,6 +94,22 @@ redteam-api
 ```
 
 The API starts on `http://127.0.0.1:8000` with OpenAPI docs at `http://127.0.0.1:8000/docs`.
+
+Create an assessment against the built-in demo target:
+
+```bash
+curl -X POST http://127.0.0.1:8000/assessments \
+  -H "Content-Type: application/json" \
+  -d '{"target_type":"vulnerable_llm_app","target_provider":"mock","target_config":{"mode":"api"}}'
+```
+
+Create an assessment against a hosted chat model:
+
+```bash
+curl -X POST http://127.0.0.1:8000/assessments \
+  -H "Content-Type: application/json" \
+  -d '{"target_type":"hosted_chat_model","target_provider":"openai","target_model":"gpt-4.1","target_config":{"system_prompt":"You are a support assistant.","capabilities":{"tool_use":false,"memory":false,"retrieval":true,"policy_layer":true},"constraints":["no-pii"]}}'
+```
 
 Report export is available through the API as well:
 
@@ -149,7 +177,8 @@ These are current limitations, not hidden gotchas:
 - The demo target is synthetic and intentionally insecure.
 - Much of the current attack execution and scoring is heuristic/scripted.
 - Persisted history is currently centered on the packaged CLI (`redteam` / `python -m redteaming_ai`), not every demo/UI entrypoint.
-- The backend API is now available for the built-in target path, but the adapter layer is still limited.
+- The packaged adapter layer now supports the built-in demo target plus hosted `openai` and `anthropic` chat models, but it is still limited.
+- Hosted target capabilities such as tools, memory, retrieval, and policy layers are metadata-only in the current adapter contract; they are not executed or enforced yet.
 - The reporting is useful for demos, not yet strong enough for serious assessments, although structured exports are now available for persisted runs.
 
 If you are evaluating whether this repo is ready to assess a real application, the honest answer is no. If you want a demo you can run locally, modify, and learn from, the answer is yes.

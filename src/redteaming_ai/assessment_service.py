@@ -4,38 +4,23 @@ from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Type
 
+from redteaming_ai.adapters import normalize_target_spec, resolve_target_spec
 from redteaming_ai.agents import RedTeamOrchestrator
 from redteaming_ai.storage import RunStorage
-from redteaming_ai.target import VulnerableLLMApp
 
 AssessmentRunner = Callable[[RunStorage, str, Dict[str, Any]], None]
 
 
-def _validate_requested_target(target_app: VulnerableLLMApp, target: Dict[str, Any]) -> None:
-    info = target_app.get_system_info()
-    requested_provider = target.get("target_provider")
-    requested_model = target.get("target_model")
-    actual_provider = info.get("llm_provider")
-    actual_model = info.get("model_name")
-
-    if requested_provider and requested_provider != actual_provider:
-        raise ValueError(
-            "Requested target provider does not match the configured runtime provider: "
-            f"requested={requested_provider}, actual={actual_provider}"
-        )
-
-    if requested_model and requested_model != actual_model:
-        raise ValueError(
-            "Requested target model does not match the configured runtime model: "
-            f"requested={requested_model}, actual={actual_model or 'unset'}"
-        )
-
-
 def default_assessment_runner(
-    storage: RunStorage, run_id: str, _target: Dict[str, Any]
+    storage: RunStorage, run_id: str, target: Dict[str, Any]
 ) -> None:
-    target_app = VulnerableLLMApp()
-    _validate_requested_target(target_app, _target)
+    spec = normalize_target_spec(
+        target_type=target.get("target_type"),
+        target_provider=target.get("target_provider"),
+        target_model=target.get("target_model"),
+        target_config=target.get("target_config"),
+    )
+    _, target_app = resolve_target_spec(spec)
     orchestrator = RedTeamOrchestrator(storage=storage, run_id=run_id)
     orchestrator.run_attack_suite(target_app)
 
@@ -70,26 +55,29 @@ class AssessmentService:
 
     def create_assessment(
         self,
-        target_provider: str,
+        target_provider: Optional[str] = None,
         target_model: Optional[str] = None,
+        target_type: str = "vulnerable_llm_app",
         target_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        spec = normalize_target_spec(
+            target_type=target_type,
+            target_provider=target_provider,
+            target_model=target_model,
+            target_config=target_config,
+        )
         storage = self._open_storage()
         try:
             run_id = storage.create_run(
-                target_provider=target_provider,
-                target_model=target_model,
-                target_config=target_config or {},
+                target_type=spec.target_type,
+                target_provider=spec.target_provider,
+                target_model=spec.target_model,
+                target_config=spec.target_config,
             )
-            target = {
-                "target_provider": target_provider,
-                "target_model": target_model,
-                "target_config": target_config or {},
-            }
         finally:
             storage.close()
 
-        self.executor.submit(self._execute_assessment, run_id, target)
+        self.executor.submit(self._execute_assessment, run_id, spec.to_dict())
         run = self.get_assessment(run_id)
         if not run:
             raise ValueError(f"Run {run_id} was not created")
@@ -122,8 +110,10 @@ class AssessmentService:
             if not run:
                 return None
             evidence = storage.get_run_evidence(run_id)
+            evidence["target_type"] = run.get("target_type")
             evidence["target_provider"] = run.get("target_provider")
             evidence["target_model"] = run.get("target_model")
+            evidence["target_config"] = run.get("target_config", {})
             return evidence
         finally:
             storage.close()
@@ -161,6 +151,7 @@ class AssessmentService:
         return {
             "id": run["id"],
             "target_id": run.get("target_id"),
+            "target_type": run.get("target_type"),
             "target_provider": run.get("target_provider"),
             "target_model": run.get("target_model"),
             "target_config": run.get("target_config", {}),

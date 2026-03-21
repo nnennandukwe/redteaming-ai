@@ -593,10 +593,11 @@ class RunStorage:
 
     def create_run(
         self,
-        target_provider: str,
+        target_provider: Optional[str],
         target_model: Optional[str],
         target_config: Dict[str, Any],
         *,
+        target_type: str = DEFAULT_TARGET_TYPE,
         target_id: Optional[str] = None,
     ) -> str:
         """Create a new running run record. Returns run_id."""
@@ -604,7 +605,10 @@ class RunStorage:
         created_at = datetime.now().isoformat()
         config_json = self._normalize_target_config(target_config)
         resolved_target_id = target_id or self._get_or_create_target(
-            target_provider, target_model, config_json
+            target_provider,
+            target_model,
+            config_json,
+            target_type=target_type,
         )
         self.conn.execute(
             """
@@ -795,10 +799,10 @@ class RunStorage:
     ) -> str:
         """Save a report for a run. Returns report_id."""
         report_id = str(uuid.uuid4())
+        context = self.get_run(run_id)
         if report is not None:
             artifact = report_to_dict(report)
         else:
-            context = self.get_run(run_id)
             artifact = context["report"] if context and context.get("report") else {}
             if not artifact:
                 artifact = {
@@ -819,6 +823,24 @@ class RunStorage:
         artifact.setdefault("available_exports", ["json", "markdown"])
         artifact.setdefault("summary", summary or {})
         artifact["run_id"] = run_id
+        if context:
+            for key in (
+                "id",
+                "target_id",
+                "target_name",
+                "target_type",
+                "target_provider",
+                "target_model",
+                "target_config",
+                "status",
+                "queued_at",
+                "started_at",
+                "completed_at",
+                "duration_seconds",
+                "error_message",
+            ):
+                if artifact.get(key) is None and context.get(key) is not None:
+                    artifact[key] = context.get(key)
         if summary and artifact.get("summary") != summary:
             merged_summary = dict(artifact.get("summary", {}))
             merged_summary.update(summary)
@@ -1021,12 +1043,14 @@ class RunStorage:
         return {
             "id": run["id"],
             "target_id": run["target_id"],
+            "target_type": run["target_type"],
             "status": run["status"],
             "queued_at": run["queued_at"],
             "started_at": run["started_at"],
             "completed_at": run["completed_at"],
             "duration_seconds": run["duration_seconds"],
             "error_message": run["error_message"],
+            "target_config": run["target_config"],
             "attempts": attempts,
         }
 
