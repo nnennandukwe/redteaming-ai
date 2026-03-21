@@ -300,6 +300,11 @@ def main():
             console.print("  python demo.py          # Interactive demo")
             console.print("  python demo.py --quick  # 5-minute quick demo")
             console.print("  python demo.py --auto   # Automated attack only")
+            console.print("")
+            console.print("[yellow]Persisted history/replay/compare:[/yellow]")
+            console.print("  redteam --history")
+            console.print("  redteam --replay <id>")
+            console.print("  redteam --compare <run-a> <run-b>")
     else:
         demo.run_interactive_demo()
 

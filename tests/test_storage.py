@@ -1,8 +1,10 @@
+import sqlite3
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from redteaming_ai.agents import PromptInjectionAgent
 from redteaming_ai.storage import RunStorage
 
 
@@ -135,7 +137,119 @@ def test_get_stats(storage):
     storage.complete_run(run_id, 10.0)
 
     stats = storage.get_stats()
+    assert stats["total_targets"] == 1
     assert stats["total_runs"] == 1
     assert stats["completed_runs"] == 1
     assert stats["total_attempts"] == 1
     assert stats["total_duration_seconds"] == 10.0
+
+
+def test_full_response_is_preserved_in_storage(storage):
+    long_message = "sensitive-" * 40
+
+    class DummyTarget:
+        def process_message(self, _payload):
+            return {"message": long_message, "vulnerable": True}
+
+    agent = PromptInjectionAgent()
+    agent.attack_payloads = ["payload"]
+
+    result = agent.attack(DummyTarget())[0]
+    assert result.response == long_message
+
+    run_id = storage.create_run("mock", None, {"test": True})
+    storage.record_attempt(
+        run_id=run_id,
+        agent_name=result.agent_name,
+        attack_type=result.attack_type,
+        payload=result.payload,
+        response=result.response,
+        success=result.success,
+        data_leaked=result.data_leaked,
+    )
+
+    run = storage.get_run(run_id)
+    assert run["attempts"][0]["response"] == long_message
+
+
+def test_compare_runs_returns_summary_and_attack_deltas(storage):
+    first_run = storage.create_run("mock", None, {"suite": "baseline"})
+    storage.record_attempt(
+        first_run, "Agent1", "prompt_injection", "p1", "r1", True, ["credentials"]
+    )
+    storage.record_attempt(first_run, "Agent2", "jailbreak", "p2", "r2", False, [])
+    storage.complete_run(first_run, 10.0)
+
+    second_run = storage.create_run("mock", None, {"suite": "candidate"})
+    storage.record_attempt(
+        second_run, "Agent1", "prompt_injection", "p1", "r1", True, ["credentials"]
+    )
+    storage.record_attempt(
+        second_run, "Agent2", "jailbreak", "p2", "r2", True, ["api_keys"]
+    )
+    storage.record_attempt(
+        second_run, "Agent3", "data_exfiltration", "p3", "r3", False, []
+    )
+    storage.complete_run(second_run, 15.0)
+
+    comparison = storage.compare_runs(first_run, second_run)
+
+    assert comparison["summary_delta"]["total_attacks"] == 1
+    assert comparison["summary_delta"]["successful_attacks"] == 1
+    assert comparison["summary_delta"]["duration"] == 5.0
+    assert comparison["attack_type_deltas"]["jailbreak"]["delta"]["successful"] == 1
+    assert comparison["attack_type_deltas"]["data_exfiltration"]["run_a"]["total"] == 0
+    assert comparison["leaked_data"]["only_in_run_b"] == ["api_keys"]
+
+
+def test_init_db_migrates_v1_runs_to_targets_schema(temp_db):
+    conn = sqlite3.connect(temp_db)
+    conn.execute("""
+        CREATE TABLE _schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT INTO _schema_version (version, applied_at) VALUES (1, ?)",
+        ("2026-03-20T00:00:00",),
+    )
+    conn.execute("""
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY,
+            target_provider TEXT,
+            target_model TEXT,
+            target_config_json TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            duration_seconds REAL
+        )
+    """)
+    conn.execute("""
+        INSERT INTO runs (
+            id, target_provider, target_model, target_config_json, started_at
+        ) VALUES (?, ?, ?, ?, ?)
+    """, (
+        "legacy-run",
+        "mock",
+        "demo-model",
+        '{"mode":"legacy"}',
+        "2026-03-20T00:00:00",
+    ))
+    conn.commit()
+    conn.close()
+
+    storage = RunStorage(db_path=temp_db)
+    storage.init_db()
+
+    run = storage.get_run("legacy-run")
+    stats = storage.get_stats()
+
+    assert run["target_id"] is not None
+    assert run["target_provider"] == "mock"
+    assert run["target_model"] == "demo-model"
+    assert run["target_config"] == {"mode": "legacy"}
+    assert stats["total_targets"] == 1
+    assert storage.conn.execute("SELECT MAX(version) FROM _schema_version").fetchone()[0] == 2
+
+    storage.close()

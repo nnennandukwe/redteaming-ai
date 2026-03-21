@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+SCHEMA_VERSION = 2
+
 
 def get_default_db_path() -> Path:
     """Get default database path in user's home directory."""
@@ -38,26 +40,69 @@ class RunStorage:
             self._conn.close()
             self._conn = None
 
-    def init_db(self):
-        """Initialize database schema."""
-        conn = self.conn
+    def _table_exists(self, table_name: str) -> bool:
+        row = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
 
+    def _column_exists(self, table_name: str, column_name: str) -> bool:
+        if not self._table_exists(table_name):
+            return False
+        columns = self.conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return any(column["name"] == column_name for column in columns)
+
+    def _detect_schema_version(self) -> int:
+        existing = self.conn.execute(
+            "SELECT MAX(version) FROM _schema_version"
+        ).fetchone()[0]
+        if existing is not None:
+            return int(existing)
+        if self._table_exists("runs"):
+            return 1 if not self._column_exists("runs", "target_id") else 2
+        return 0
+
+    def _record_schema_version(self, version: int):
+        self.conn.execute("DELETE FROM _schema_version")
+        self.conn.execute(
+            "INSERT INTO _schema_version (version, applied_at) VALUES (?, ?)",
+            (version, datetime.now().isoformat()),
+        )
+
+    def _normalize_target_config(self, target_config: Any) -> str:
+        if isinstance(target_config, str):
+            try:
+                parsed = json.loads(target_config)
+            except json.JSONDecodeError:
+                return json.dumps({"raw": target_config}, sort_keys=True)
+            return json.dumps(parsed, sort_keys=True)
+        return json.dumps(target_config or {}, sort_keys=True)
+
+    def _ensure_schema(self):
+        conn = self.conn
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS _schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS targets (
+                id TEXT PRIMARY KEY,
+                provider TEXT,
+                model TEXT,
+                config_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(provider, model, config_json)
             )
         """)
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS runs (
                 id TEXT PRIMARY KEY,
+                target_id TEXT,
                 target_provider TEXT,
                 target_model TEXT,
                 target_config_json TEXT,
                 started_at TEXT NOT NULL,
                 completed_at TEXT,
-                duration_seconds REAL
+                duration_seconds REAL,
+                FOREIGN KEY (target_id) REFERENCES targets(id)
             )
         """)
 
@@ -100,15 +145,94 @@ class RunStorage:
             CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at)
         """)
 
-        existing = conn.execute("SELECT MAX(version) FROM _schema_version").fetchone()[
-            0
-        ]
-        if not existing:
+        if self._column_exists("runs", "target_id"):
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_runs_target_id ON runs(target_id)
+            """)
+
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_targets_provider_model
+            ON targets(provider, model)
+        """)
+
+    def _get_or_create_target(
+        self, provider: Optional[str], model: Optional[str], config_json: str
+    ) -> str:
+        existing = self.conn.execute(
+            """
+            SELECT id FROM targets
+            WHERE provider IS ? AND model IS ? AND config_json = ?
+        """,
+            (provider, model, config_json),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
+        target_id = str(uuid.uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO targets (id, provider, model, config_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """,
+            (target_id, provider, model, config_json, datetime.now().isoformat()),
+        )
+        return target_id
+
+    def _migrate_to_v2(self):
+        conn = self.conn
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS targets (
+                id TEXT PRIMARY KEY,
+                provider TEXT,
+                model TEXT,
+                config_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(provider, model, config_json)
+            )
+        """)
+
+        if not self._column_exists("runs", "target_id"):
+            conn.execute("ALTER TABLE runs ADD COLUMN target_id TEXT")
+
+        runs = conn.execute(
+            """
+            SELECT id, target_provider, target_model, target_config_json
+            FROM runs
+            WHERE target_id IS NULL
+        """
+        ).fetchall()
+
+        for run in runs:
+            config_json = self._normalize_target_config(run["target_config_json"])
+            target_id = self._get_or_create_target(
+                run["target_provider"],
+                run["target_model"],
+                config_json,
+            )
             conn.execute(
-                "INSERT INTO _schema_version (version, applied_at) VALUES (1, ?)",
-                (datetime.now().isoformat(),),
+                """
+                UPDATE runs
+                SET target_id = ?, target_config_json = ?
+                WHERE id = ?
+            """,
+                (target_id, config_json, run["id"]),
             )
 
+    def init_db(self):
+        """Initialize database schema."""
+        conn = self.conn
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS _schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+        """)
+        self._ensure_schema()
+        current_version = self._detect_schema_version()
+        if current_version < 2:
+            self._migrate_to_v2()
+        self._record_schema_version(SCHEMA_VERSION)
         conn.commit()
 
     def create_run(
@@ -119,17 +243,27 @@ class RunStorage:
     ) -> str:
         """Create a new run record. Returns run_id."""
         run_id = str(uuid.uuid4())
+        config_json = self._normalize_target_config(target_config)
+        target_id = self._get_or_create_target(target_provider, target_model, config_json)
         conn = self.conn
         conn.execute(
             """
-            INSERT INTO runs (id, target_provider, target_model, target_config_json, started_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO runs (
+                id,
+                target_id,
+                target_provider,
+                target_model,
+                target_config_json,
+                started_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
         """,
             (
                 run_id,
+                target_id,
                 target_provider,
                 target_model,
-                json.dumps(target_config),
+                config_json,
                 datetime.now().isoformat(),
             ),
         )
@@ -212,7 +346,19 @@ class RunStorage:
         """Get a run with all its attempts."""
         conn = self.conn
 
-        run = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        run = conn.execute(
+            """
+            SELECT
+                r.*,
+                t.provider AS target_provider_resolved,
+                t.model AS target_model_resolved,
+                t.config_json AS target_config_json_resolved
+            FROM runs r
+            LEFT JOIN targets t ON t.id = r.target_id
+            WHERE r.id = ?
+        """,
+            (run_id,),
+        ).fetchone()
         if not run:
             return None
 
@@ -227,10 +373,13 @@ class RunStorage:
 
         return {
             "id": run["id"],
-            "target_provider": run["target_provider"],
-            "target_model": run["target_model"],
-            "target_config": json.loads(run["target_config_json"])
-            if run["target_config_json"]
+            "target_id": run["target_id"],
+            "target_provider": run["target_provider_resolved"] or run["target_provider"],
+            "target_model": run["target_model_resolved"] or run["target_model"],
+            "target_config": json.loads(
+                run["target_config_json_resolved"] or run["target_config_json"] or "{}"
+            )
+            if (run["target_config_json_resolved"] or run["target_config_json"])
             else {},
             "started_at": run["started_at"],
             "completed_at": run["completed_at"],
@@ -244,12 +393,15 @@ class RunStorage:
         conn = self.conn
         runs = conn.execute(
             """
-            SELECT r.id, r.target_provider, r.target_model, r.started_at,
-                   r.completed_at, r.duration_seconds,
+            SELECT r.id, r.target_id,
+                   COALESCE(t.provider, r.target_provider) AS target_provider,
+                   COALESCE(t.model, r.target_model) AS target_model,
+                   r.started_at, r.completed_at, r.duration_seconds,
                    (SELECT COUNT(*) FROM attack_attempts WHERE run_id = r.id) as attempt_count,
                    (SELECT COUNT(*) FROM attack_attempts WHERE run_id = r.id AND success = 1) as success_count,
                    (SELECT summary_json FROM reports WHERE run_id = r.id) as summary_json
             FROM runs r
+            LEFT JOIN targets t ON t.id = r.target_id
             ORDER BY r.started_at DESC
             LIMIT ?
         """,
@@ -262,6 +414,7 @@ class RunStorage:
             results.append(
                 {
                     "id": run["id"],
+                    "target_id": run["target_id"],
                     "target_provider": run["target_provider"],
                     "target_model": run["target_model"],
                     "started_at": run["started_at"],
@@ -328,6 +481,91 @@ class RunStorage:
             ],
         }
 
+    def compare_runs(self, run_a_id: str, run_b_id: str) -> Dict[str, Any]:
+        """Compare two runs and return stable summary and delta data."""
+        run_a = self.get_run(run_a_id)
+        run_b = self.get_run(run_b_id)
+        if not run_a:
+            raise ValueError(f"Run {run_a_id} not found")
+        if not run_b:
+            raise ValueError(f"Run {run_b_id} not found")
+
+        report_a = self.regenerate_report(run_a_id)
+        report_b = self.regenerate_report(run_b_id)
+
+        summary_delta = {}
+        for key in ("total_attacks", "successful_attacks", "success_rate", "duration"):
+            summary_delta[key] = report_b["summary"][key] - report_a["summary"][key]
+
+        attack_type_deltas = {}
+        attack_types = sorted(
+            set(report_a["attacks_by_type"]) | set(report_b["attacks_by_type"])
+        )
+        for attack_type in attack_types:
+            stats_a = report_a["attacks_by_type"].get(
+                attack_type, {"total": 0, "successful": 0}
+            )
+            stats_b = report_b["attacks_by_type"].get(
+                attack_type, {"total": 0, "successful": 0}
+            )
+            rate_a = (
+                (stats_a["successful"] / stats_a["total"] * 100)
+                if stats_a["total"] > 0
+                else 0
+            )
+            rate_b = (
+                (stats_b["successful"] / stats_b["total"] * 100)
+                if stats_b["total"] > 0
+                else 0
+            )
+            attack_type_deltas[attack_type] = {
+                "run_a": {
+                    "total": stats_a["total"],
+                    "successful": stats_a["successful"],
+                    "success_rate": rate_a,
+                },
+                "run_b": {
+                    "total": stats_b["total"],
+                    "successful": stats_b["successful"],
+                    "success_rate": rate_b,
+                },
+                "delta": {
+                    "total": stats_b["total"] - stats_a["total"],
+                    "successful": stats_b["successful"] - stats_a["successful"],
+                    "success_rate": rate_b - rate_a,
+                },
+            }
+
+        leaked_a = set(report_a["leaked_data_types"])
+        leaked_b = set(report_b["leaked_data_types"])
+
+        return {
+            "run_a": {
+                "id": run_a["id"],
+                "target_id": run_a["target_id"],
+                "target_provider": run_a["target_provider"],
+                "target_model": run_a["target_model"],
+                "started_at": run_a["started_at"],
+                "summary": report_a["summary"],
+            },
+            "run_b": {
+                "id": run_b["id"],
+                "target_id": run_b["target_id"],
+                "target_provider": run_b["target_provider"],
+                "target_model": run_b["target_model"],
+                "started_at": run_b["started_at"],
+                "summary": report_b["summary"],
+            },
+            "summary_delta": summary_delta,
+            "attack_type_deltas": attack_type_deltas,
+            "leaked_data": {
+                "run_a": sorted(leaked_a),
+                "run_b": sorted(leaked_b),
+                "only_in_run_a": sorted(leaked_a - leaked_b),
+                "only_in_run_b": sorted(leaked_b - leaked_a),
+            },
+        }
+
     def delete_run(self, run_id: str):
         """Delete a run and all associated data."""
         conn = self.conn
@@ -339,6 +577,7 @@ class RunStorage:
     def get_stats(self) -> Dict[str, Any]:
         """Get overall storage statistics."""
         conn = self.conn
+        total_targets = conn.execute("SELECT COUNT(*) FROM targets").fetchone()[0]
         total_runs = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
         completed_runs = conn.execute(
             "SELECT COUNT(*) FROM runs WHERE completed_at IS NOT NULL"
@@ -354,6 +593,7 @@ class RunStorage:
         )
 
         return {
+            "total_targets": total_targets,
             "total_runs": total_runs,
             "completed_runs": completed_runs,
             "total_attempts": total_attempts,
