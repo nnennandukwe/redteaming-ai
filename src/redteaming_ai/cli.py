@@ -36,6 +36,13 @@ def _default_export_path(run_id: str, export_format: str) -> Path:
     return Path.home() / ".redteaming-ai" / "exports" / f"{run_id}.{suffix}"
 
 
+def _display_timestamp(run: Dict[str, Any]) -> str:
+    timestamp = run.get("started_at") or run.get("queued_at")
+    if not timestamp:
+        return "—"
+    return str(timestamp)[:19].replace("T", " ")
+
+
 def _coerce_mapping(value: Any) -> Dict[str, Any]:
     if value is None:
         return {}
@@ -372,7 +379,7 @@ def _render_history(storage: RunStorage):
     table.add_column("Success Rate", style="red")
 
     for run in runs:
-        date = run["started_at"][:19].replace("T", " ")
+        date = _display_timestamp(run)
         duration = (
             f"{run['duration_seconds']:.1f}s" if run["duration_seconds"] else "—"
         )
@@ -408,7 +415,7 @@ def _render_replay(storage: RunStorage, run_id: str):
             f"ID: {run_id}\n"
             f"Provider: {run['target_provider']}\n"
             f"Model: {run['target_model'] or 'unknown'}\n"
-            f"Date: {run['started_at'][:19].replace('T', ' ')}",
+            f"Date: {_display_timestamp(run)}",
             border_style="cyan",
         )
     )

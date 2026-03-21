@@ -75,6 +75,36 @@ def test_cli_history_and_replay_use_packaged_storage(monkeypatch, capsys, tmp_pa
     assert "baseline-model" in replay_output
 
 
+def test_cli_history_and_replay_handle_queued_runs(monkeypatch, capsys, tmp_path):
+    storage = RunStorage(db_path=tmp_path / "runs.db")
+    storage.init_db()
+    target = storage.create_target(
+        name="Queued target",
+        target_type="vulnerable_llm_app",
+        provider="mock",
+        model="queued-model",
+        config={"mode": "queued"},
+    )
+    run_id = storage.create_queued_run(target["id"])
+    storage.close()
+
+    monkeypatch.setattr(cli, "RunStorage", _storage_class_for(tmp_path / "runs.db"))
+
+    monkeypatch.setattr(sys, "argv", ["redteam", "--history"])
+    cli.main()
+    history_output = capsys.readouterr().out
+    assert "Recent Runs" in history_output
+    assert run_id in history_output
+
+    monkeypatch.setattr(sys, "argv", ["redteam", "--replay", run_id])
+    cli.main()
+    replay_output = capsys.readouterr().out
+    assert "Run Replay" in replay_output
+    assert run_id in replay_output
+    assert "queued-model" in replay_output
+    assert "Date: 20" in replay_output
+
+
 def test_cli_replay_renders_structured_findings(monkeypatch, capsys):
     class ArtifactStorage:
         def __init__(self):
