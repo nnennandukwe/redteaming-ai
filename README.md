@@ -53,8 +53,13 @@ pip install -e .
 redteam --auto
 redteam --history
 redteam --replay <run-id>
+redteam --export <run-id> --format json
+redteam --export <run-id> --format markdown --output ./report.md
 redteam --compare <run-a> <run-b>
 ```
+
+Exports are written to `~/.redteaming-ai/exports/` by default when `--output` is not provided.
+Replay and export now consume the stored report artifact when available, which keeps the CLI aligned with persisted findings and other structured report data.
 
 You can also use the module entrypoint:
 
@@ -67,6 +72,23 @@ python -m redteaming_ai --history
 ```bash
 pip install -r requirements.txt
 streamlit run streamlit_demo.py
+```
+
+### Backend API
+
+```bash
+pip install -e .
+redteam-api
+```
+
+The API starts on `http://127.0.0.1:8000` with OpenAPI docs at `http://127.0.0.1:8000/docs`.
+
+Report export is available through the API as well:
+
+```bash
+curl http://127.0.0.1:8000/assessments/<run-id>/report
+curl "http://127.0.0.1:8000/assessments/<run-id>/report/export?format=json"
+curl "http://127.0.0.1:8000/assessments/<run-id>/report/export?format=markdown"
 ```
 
 ### Configuration
@@ -115,7 +137,8 @@ pytest -q
 - `vulnerable_app.py`: intentionally vulnerable demo target
 - `red_team_agents.py`: attack payloads, orchestration, and reporting logic
 - `demo.py`: interactive CLI demo
-- `src/redteaming_ai/cli.py`: packaged CLI with persisted history, replay, and compare
+- `src/redteaming_ai/cli.py`: packaged CLI with persisted history, replay, compare, and export
+- `src/redteaming_ai/api.py`: packaged API for assessments, reports, evidence, and exports
 - `streamlit_demo.py`: Streamlit interface
 - `quick_start.sh`: basic launcher for demo modes
 
@@ -126,8 +149,8 @@ These are current limitations, not hidden gotchas:
 - The demo target is synthetic and intentionally insecure.
 - Much of the current attack execution and scoring is heuristic/scripted.
 - Persisted history is currently centered on the packaged CLI (`redteam` / `python -m redteaming_ai`), not every demo/UI entrypoint.
-- There is no backend API or target adapter layer yet.
-- The reporting is useful for demos, not yet strong enough for serious assessments.
+- The backend API is now available for the built-in target path, but the adapter layer is still limited.
+- The reporting is useful for demos, not yet strong enough for serious assessments, although structured exports are now available for persisted runs.
 
 If you are evaluating whether this repo is ready to assess a real application, the honest answer is no. If you want a demo you can run locally, modify, and learn from, the answer is yes.
 

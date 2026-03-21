@@ -9,6 +9,31 @@ import streamlit as st
 from redteaming_ai.agents import RedTeamOrchestrator
 from redteaming_ai.target import VulnerableLLMApp
 
+
+def _render_report_findings(report):
+    findings = report.get("findings") or []
+    if findings:
+        st.subheader("Structured Findings")
+        for finding in findings:
+            severity = finding.get("severity", "unknown")
+            title = finding.get("title", "Untitled finding")
+            with st.expander(f"{severity.upper()} - {title}"):
+                st.write(f"**Category:** {finding.get('category', 'unknown')}")
+                if finding.get("description"):
+                    st.write(f"**Description:** {finding['description']}")
+                if finding.get("rationale"):
+                    st.write(f"**Rationale:** {finding['rationale']}")
+                if finding.get("remediation"):
+                    st.write(f"**Remediation:** {finding['remediation']}")
+                evidence = finding.get("evidence") or []
+                if evidence:
+                    st.write(f"**Evidence items:** {len(evidence)}")
+    else:
+        st.subheader("Legacy Vulnerabilities")
+        for vuln in report.get("vulnerabilities", []):
+            st.write(vuln)
+
+
 st.set_page_config(
     page_title="Red Team LLM Security Demo",
     page_icon="🔴",
@@ -157,10 +182,7 @@ with col1:
 
                 st.success(f"✅ Completed {report['summary']['total_attacks']} attacks")
                 st.error(f"🚨 Success Rate: {report['summary']['success_rate']:.1f}%")
-
-                st.subheader("Vulnerabilities Found:")
-                for vuln in report['vulnerabilities']:
-                    st.write(vuln)
+                _render_report_findings(report)
 
 with col2:
     st.header("📜 Conversation History")

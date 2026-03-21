@@ -4,8 +4,12 @@ RED TEAM DEMO - Live Demonstration Script
 Run this for your presentation!
 """
 
+import json
 import sys
 import time
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from rich.console import Console
 from rich.panel import Panel
@@ -27,6 +31,307 @@ def preview_text(text: str, limit: int = 200) -> str:
     return f"{text[:limit]}..."
 
 
+def _default_export_path(run_id: str, export_format: str) -> Path:
+    suffix = "json" if export_format == "json" else "md"
+    return Path.home() / ".redteaming-ai" / "exports" / f"{run_id}.{suffix}"
+
+
+def _coerce_mapping(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump") and callable(value.model_dump):
+        dumped = value.model_dump()
+        return dict(dumped) if isinstance(dumped, dict) else {"value": dumped}
+    if hasattr(value, "dict") and callable(value.dict):
+        dumped = value.dict()
+        return dict(dumped) if isinstance(dumped, dict) else {"value": dumped}
+    if is_dataclass(value):
+        return asdict(value)
+    return {"value": value}
+
+
+def _normalize_report_artifact(
+    report: Any, run: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    normalized = _coerce_mapping(report)
+
+    if run:
+        for key in (
+            "id",
+            "target_id",
+            "target_name",
+            "target_type",
+            "target_provider",
+            "target_model",
+            "status",
+            "queued_at",
+            "started_at",
+            "completed_at",
+            "duration_seconds",
+            "error_message",
+        ):
+            if key not in normalized and run.get(key) is not None:
+                normalized[key] = run.get(key)
+
+    normalized.setdefault("summary", {})
+    normalized.setdefault("attacks_by_type", {})
+    normalized.setdefault("leaked_data_types", [])
+    normalized.setdefault("findings", [])
+    normalized.setdefault("vulnerabilities", [])
+    normalized.setdefault("results", [])
+    normalized.setdefault("available_exports", ["json", "markdown"])
+    return normalized
+
+
+def _format_number(value: Any, precision: str, default: str) -> str:
+    try:
+        return format(float(value), precision)
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_report_artifact(storage: RunStorage, run_id: str) -> Dict[str, Any]:
+    artifact_getter = getattr(storage, "get_report_artifact", None)
+    if callable(artifact_getter):
+        report = artifact_getter(run_id)
+        if report is not None:
+            run = storage.get_run(run_id)
+            return _normalize_report_artifact(report, run)
+
+    run = storage.get_run(run_id)
+    if not run:
+        return {}
+
+    report = run.get("report")
+    if report:
+        return _normalize_report_artifact(report, run)
+
+    legacy_report_getter = getattr(storage, "regenerate_report", None)
+    if callable(legacy_report_getter):
+        report = legacy_report_getter(run_id)
+        return _normalize_report_artifact(report, run)
+
+    return _normalize_report_artifact({}, run)
+
+
+def _report_summary_lines(report: Dict[str, Any]) -> None:
+    summary = report.get("summary", {})
+    console.print("\n[bold cyan]Summary:[/bold cyan]")
+    console.print(f"  Total Attacks: {summary.get('total_attacks', 0)}")
+    console.print(f"  Successful: {summary.get('successful_attacks', 0)}")
+    console.print(
+        f"  Success Rate: {_format_number(summary.get('success_rate', 0), '.1f', '0.0')}%"
+    )
+    console.print(f"  Duration: {_format_number(summary.get('duration', 0), '.2f', '0.00')}s")
+
+    if report.get("schema_version") is not None:
+        console.print(f"  Schema Version: {report['schema_version']}")
+
+
+def _report_breakdown_lines(report: Dict[str, Any]) -> None:
+    if report.get("attacks_by_type"):
+        console.print("\n[bold cyan]By Attack Type:[/bold cyan]")
+        for attack_type, stats in report["attacks_by_type"].items():
+            total = stats.get("total", 0)
+            successful = stats.get("successful", 0)
+            rate = (successful / total * 100) if total > 0 else 0
+            console.print(f"  {attack_type}: {successful}/{total} ({rate:.0f}%)")
+
+    if report.get("leaked_data_types"):
+        console.print("\n[bold red]Leaked Data Types:[/bold red]")
+        for leaked_type in report["leaked_data_types"]:
+            console.print(f"  • {leaked_type}")
+
+
+def _report_findings(report: Dict[str, Any]) -> list[Dict[str, Any]]:
+    findings = report.get("findings") or []
+    if findings:
+        return findings
+
+    vulnerabilities = report.get("vulnerabilities") or []
+    return [
+        {
+            "title": vulnerability,
+            "severity": "legacy",
+            "category": "compatibility",
+            "description": vulnerability,
+            "evidence": [],
+            "rationale": "Legacy report field retained for compatibility.",
+            "remediation": "",
+        }
+        for vulnerability in vulnerabilities
+    ]
+
+
+def _render_findings(report: Dict[str, Any]) -> None:
+    findings = _report_findings(report)
+    if not findings:
+        return
+
+    if report.get("findings"):
+        console.print("\n[bold red]Findings:[/bold red]")
+    else:
+        console.print("\n[bold red]Legacy Vulnerabilities:[/bold red]")
+
+    for finding in findings:
+        evidence = finding.get("evidence") or []
+        first_evidence = ""
+        if evidence:
+            first = evidence[0]
+            if isinstance(first, dict):
+                first_evidence = first.get("payload") or first.get("response") or first.get(
+                    "message", ""
+                )
+            else:
+                first_evidence = str(first)
+
+        details = [
+            f"[bold]{finding.get('title', 'Untitled Finding')}[/bold]",
+            f"Severity: {str(finding.get('severity', 'unknown')).upper()}",
+            f"Category: {finding.get('category', 'unknown')}",
+        ]
+
+        rationale = finding.get("rationale")
+        if rationale:
+            details.append(f"Rationale: {rationale}")
+
+        remediation = finding.get("remediation")
+        if remediation:
+            details.append(f"Remediation: {remediation}")
+
+        if evidence:
+            details.append(f"Evidence items: {len(evidence)}")
+            if first_evidence:
+                details.append(f"First evidence: {preview_text(first_evidence, 220)}")
+
+        console.print(Panel.fit("\n".join(details), border_style="red"))
+
+
+def _render_report_console(report: Dict[str, Any]) -> None:
+    _report_summary_lines(report)
+    _report_breakdown_lines(report)
+    _render_findings(report)
+
+
+def _report_to_json(report: Dict[str, Any]) -> str:
+    def _default(value: Any) -> Any:
+        if is_dataclass(value):
+            return asdict(value)
+        if hasattr(value, "model_dump") and callable(value.model_dump):
+            return value.model_dump()
+        if hasattr(value, "dict") and callable(value.dict):
+            return value.dict()
+        return str(value)
+
+    return json.dumps(report, indent=2, sort_keys=True, ensure_ascii=False, default=_default)
+
+
+def _report_to_markdown(report: Dict[str, Any]) -> str:
+    summary = report.get("summary", {})
+    lines = ["# Assessment Report", ""]
+
+    if report.get("id"):
+        lines.append(f"- Run ID: `{report['id']}`")
+    if report.get("target_name"):
+        lines.append(f"- Target: `{report['target_name']}`")
+    if report.get("target_provider") or report.get("target_model"):
+        provider = report.get("target_provider") or "unknown"
+        model = report.get("target_model") or "unknown"
+        lines.append(f"- Provider / Model: `{provider}` / `{model}`")
+    if report.get("generated_at"):
+        lines.append(f"- Generated At: `{report['generated_at']}`")
+    if report.get("schema_version") is not None:
+        lines.append(f"- Schema Version: `{report['schema_version']}`")
+
+    lines.extend(["", "## Summary", ""])
+    for label, key in (
+        ("Total Attacks", "total_attacks"),
+        ("Successful Attacks", "successful_attacks"),
+        ("Success Rate", "success_rate"),
+        ("Duration", "duration"),
+    ):
+        value = summary.get(key, "—")
+        if key == "success_rate" and value != "—":
+            value = f"{_format_number(value, '.1f', '0.0')}%"
+        if key == "duration" and value != "—":
+            value = f"{_format_number(value, '.2f', '0.00')}s"
+        lines.append(f"- {label}: `{value}`")
+
+    findings = report.get("findings") or []
+    if findings:
+        lines.extend(["", "## Findings", ""])
+        for finding in findings:
+            lines.append(f"### {finding.get('title', 'Untitled Finding')}")
+            lines.append("")
+            lines.append(f"- Severity: `{finding.get('severity', 'unknown')}`")
+            lines.append(f"- Category: `{finding.get('category', 'unknown')}`")
+            if finding.get("description"):
+                lines.append(f"- Description: {finding['description']}")
+            if finding.get("rationale"):
+                lines.append(f"- Rationale: {finding['rationale']}")
+            if finding.get("remediation"):
+                lines.append(f"- Remediation: {finding['remediation']}")
+            evidence = finding.get("evidence") or []
+            if evidence:
+                lines.append("- Evidence:")
+                for item in evidence:
+                    if isinstance(item, dict):
+                        text = (
+                            item.get("payload")
+                            or item.get("response")
+                            or item.get("message")
+                            or item.get("id")
+                            or json.dumps(item, sort_keys=True, default=str)
+                        )
+                    else:
+                        text = str(item)
+                    lines.append(f"  - `{preview_text(text, 160)}`")
+            lines.append("")
+    elif report.get("vulnerabilities"):
+        lines.extend(["", "## Legacy Vulnerabilities", ""])
+        for vulnerability in report["vulnerabilities"]:
+            lines.append(f"- {vulnerability}")
+
+    if report.get("attacks_by_type"):
+        lines.extend(["", "## Attack Breakdown", ""])
+        for attack_type, stats in report["attacks_by_type"].items():
+            total = stats.get("total", 0)
+            successful = stats.get("successful", 0)
+            rate = (successful / total * 100) if total > 0 else 0
+            lines.append(
+                f"- `{attack_type}`: {successful}/{total} successful ({rate:.0f}%)"
+            )
+
+    if report.get("leaked_data_types"):
+        lines.extend(["", "## Leaked Data Types", ""])
+        for leaked_type in report["leaked_data_types"]:
+            lines.append(f"- `{leaked_type}`")
+
+    if report.get("available_exports"):
+        lines.extend(["", "## Available Exports", ""])
+        for export_name in report["available_exports"]:
+            lines.append(f"- `{export_name}`")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _write_export(report: Dict[str, Any], run_id: str, export_format: str, output: Optional[str]) -> Path:
+    export_format = export_format.lower()
+    if export_format not in {"json", "markdown"}:
+        console.print("[red]Error: --format must be json or markdown[/red]")
+        sys.exit(1)
+
+    export_text = _report_to_json(report) if export_format == "json" else _report_to_markdown(report)
+    output_path = Path(output).expanduser() if output else _default_export_path(run_id, export_format)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(export_text, encoding="utf-8")
+    console.print(f"[green]Exported report to {output_path}[/green]")
+    return output_path
+
+
 def _print_usage():
     print("Usage:")
     print("  redteam                     # Interactive demo")
@@ -34,6 +339,7 @@ def _print_usage():
     print("  redteam --auto              # Automated attack only (saves to history)")
     print("  redteam --history           # List recent runs")
     print("  redteam --replay <id>       # Replay a specific run")
+    print("  redteam --export <id> --format json|markdown [--output <path>]")
     print("  redteam --compare <a> <b>   # Compare two runs")
     print("")
     print("Equivalent module entrypoint:")
@@ -107,30 +413,18 @@ def _render_replay(storage: RunStorage, run_id: str):
         )
     )
 
-    report = storage.regenerate_report(run_id)
+    report = _load_report_artifact(storage, run_id)
+    _render_report_console(report)
 
-    console.print("\n[bold cyan]Summary:[/bold cyan]")
-    console.print(f"  Total Attacks: {report['summary']['total_attacks']}")
-    console.print(f"  Successful: {report['summary']['successful_attacks']}")
-    console.print(f"  Success Rate: {report['summary']['success_rate']:.1f}%")
-    console.print(f"  Duration: {report['summary']['duration']:.2f}s")
 
-    if report.get("attacks_by_type"):
-        console.print("\n[bold cyan]By Attack Type:[/bold cyan]")
-        for attack_type, stats in report["attacks_by_type"].items():
-            rate = (
-                (stats["successful"] / stats["total"] * 100)
-                if stats["total"] > 0
-                else 0
-            )
-            console.print(
-                f"  {attack_type}: {stats['successful']}/{stats['total']} ({rate:.0f}%)"
-            )
+def _export_report(storage: RunStorage, run_id: str, export_format: str, output: Optional[str]):
+    run = storage.get_run(run_id)
+    if not run:
+        console.print(f"[red]Run not found: {run_id}[/red]")
+        sys.exit(1)
 
-    if report.get("leaked_data_types"):
-        console.print("\n[bold red]Leaked Data Types:[/bold red]")
-        for leaked_type in report["leaked_data_types"]:
-            console.print(f"  • {leaked_type}")
+    report = _load_report_artifact(storage, run_id)
+    _write_export(report, run_id, export_format, output)
 
 
 def _render_compare(storage: RunStorage, run_a_id: str, run_b_id: str):
@@ -366,9 +660,7 @@ class RedTeamDemo:
             report = self._run_persisted_attack_suite()
 
             console.print("\n[bold green]Assessment Complete![/bold green]")
-            console.print(
-                f"Success Rate: [bold red]{report['summary']['success_rate']:.1f}%[/bold red]"
-            )
+            _render_report_console(report)
 
     def show_mitigations(self):
         """Show how to fix the vulnerabilities"""
@@ -483,7 +775,7 @@ class RedTeamDemo:
         console.print(
             f"\n[bold red]RESULTS: {report['summary']['success_rate']:.0f}% Success Rate[/bold red]"
         )
-        console.print("[bold red]Multiple Critical Vulnerabilities Found![/bold red]")
+        _render_findings(report)
 
 
 def main():
@@ -513,6 +805,35 @@ def main():
             storage = _open_storage()
             try:
                 _render_replay(storage, run_id)
+            finally:
+                storage.close()
+            return
+
+        if arg == "--export":
+            if len(sys.argv) < 3 or sys.argv[2].startswith("--"):
+                console.print("[red]Error: --export requires a run ID[/red]")
+                console.print("Usage: redteam --export <run-id> --format json|markdown [--output <path>]")
+                sys.exit(1)
+
+            run_id = sys.argv[2]
+            export_format = "json"
+            output_path: Optional[str] = None
+            if "--format" in sys.argv:
+                format_index = sys.argv.index("--format")
+                if format_index + 1 >= len(sys.argv):
+                    console.print("[red]Error: --format requires a value[/red]")
+                    sys.exit(1)
+                export_format = sys.argv[format_index + 1]
+            if "--output" in sys.argv:
+                output_index = sys.argv.index("--output")
+                if output_index + 1 >= len(sys.argv):
+                    console.print("[red]Error: --output requires a value[/red]")
+                    sys.exit(1)
+                output_path = sys.argv[output_index + 1]
+
+            storage = _open_storage()
+            try:
+                _export_report(storage, run_id, export_format, output_path)
             finally:
                 storage.close()
             return
