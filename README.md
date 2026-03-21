@@ -14,7 +14,7 @@ Today, this repo is best understood as an educational demo, not a full red-teami
 The codebase currently centers on:
 
 - a deliberately vulnerable sample app
-- a small set of scripted attack agents
+- a managed attack corpus with seeded generation strategies
 - a CLI demo flow
 - a Streamlit demo UI
 
@@ -51,6 +51,9 @@ python demo.py --auto
 ```bash
 pip install -e .
 redteam --auto
+redteam --auto --attack-strategy corpus --seed 0
+redteam --auto --attack-strategy mutate --attack-categories prompt_injection,jailbreak --seed 42
+redteam --auto --attack-strategy fuzz --attack-categories prompt_injection,data_exfiltration,jailbreak --attack-budget 12 --seed 7
 redteam --auto --target-type hosted_chat_model --target-provider openai --target-model gpt-4.1
 redteam --history
 redteam --replay <run-id>
@@ -61,7 +64,7 @@ redteam --compare <run-a> <run-b>
 
 Exports are written to `~/.redteaming-ai/exports/` by default when `--output` is not provided.
 Replay and export now consume the stored report artifact when available, which keeps the CLI aligned with persisted findings and other structured report data.
-`redteam --auto` accepts `--target-type`, `--target-provider`, `--target-model`, and `--target-config '<json>'` for packaged assessment runs.
+`redteam --auto` accepts `--target-type`, `--target-provider`, `--target-model`, `--target-config '<json>'`, `--attack-categories <csv>`, `--attack-strategy corpus|mutate|fuzz`, `--attack-budget <int>`, and `--seed <int>` for packaged assessment runs.
 
 Hosted chat example with declarative capability metadata:
 
@@ -175,7 +178,7 @@ pytest -q
 These are current limitations, not hidden gotchas:
 
 - The demo target is synthetic and intentionally insecure.
-- Much of the current attack execution and scoring is heuristic/scripted.
+- Much of the current attack execution and scoring is still managed through seeded corpus strategies rather than a full fuzzing platform.
 - Persisted history is currently centered on the packaged CLI (`redteam` / `python -m redteaming_ai`), not every demo/UI entrypoint.
 - The packaged adapter layer now supports the built-in demo target plus hosted `openai` and `anthropic` chat models, but it is still limited.
 - Hosted target capabilities such as tools, memory, retrieval, and policy layers are metadata-only in the current adapter contract; they are not executed or enforced yet.

@@ -55,6 +55,10 @@ def test_cli_help_mentions_packaged_entrypoints(monkeypatch, capsys):
     assert "redteam --history" in captured
     assert "redteam --compare <a> <b>" in captured
     assert "--target-type <type>" in captured
+    assert "--attack-categories <csv>" in captured
+    assert "--attack-strategy corpus|mutate|fuzz" in captured
+    assert "--attack-budget <int>" in captured
+    assert "--seed <int>" in captured
     assert "redteam --export <id> --format json|markdown [--output <path>]" in captured
     assert "python -m redteaming_ai [args]" in captured
 
@@ -209,6 +213,14 @@ def test_cli_export_uses_report_artifact_and_default_path(monkeypatch, tmp_path)
                 "completed_at": "2026-03-21T10:01:00",
                 "duration_seconds": 60.0,
                 "error_message": None,
+                "target_config": {
+                    "campaign": {
+                        "attack_categories": ["prompt_injection", "jailbreak"],
+                        "attack_strategy": "mutate",
+                        "attack_budget": 6,
+                        "seed": 42,
+                    }
+                },
                 "report": None,
             }
 
@@ -286,6 +298,77 @@ def test_cli_export_uses_report_artifact_and_default_path(monkeypatch, tmp_path)
     exported_md = default_md.read_text()
     assert "Sensitive data exposed" in exported_md
     assert "Redact secrets and enforce least privilege." in exported_md
+    assert "## Campaign" in exported_md
+    assert "Strategy: `mutate`" in exported_md
+    assert "Seed: `42`" in exported_md
+
+
+def test_cli_replay_surfaces_campaign_metadata(monkeypatch, capsys):
+    class ArtifactStorage:
+        def __init__(self):
+            self.closed = False
+
+        def init_db(self):
+            return None
+
+        def close(self):
+            self.closed = True
+
+        def get_run(self, run_id):
+            return {
+                "id": run_id,
+                "target_id": "target-123",
+                "target_name": "Campaign Target",
+                "target_type": "vulnerable_llm_app",
+                "target_provider": "mock",
+                "target_model": "campaign-model",
+                "status": "completed",
+                "queued_at": "2026-03-21T10:00:00",
+                "started_at": "2026-03-21T10:00:00",
+                "completed_at": "2026-03-21T10:01:00",
+                "duration_seconds": 60.0,
+                "error_message": None,
+                "target_config": {
+                    "campaign": {
+                        "attack_categories": ["prompt_injection", "data_exfiltration"],
+                        "attack_strategy": "fuzz",
+                        "attack_budget": 12,
+                        "seed": 7,
+                    }
+                },
+                "report": None,
+            }
+
+        def get_report_artifact(self, run_id):
+            return {
+                "id": run_id,
+                "generated_at": "2026-03-21T10:01:00",
+                "schema_version": 1,
+                "summary": {
+                    "total_attacks": 2,
+                    "successful_attacks": 1,
+                    "success_rate": 50.0,
+                    "duration": 60.0,
+                },
+                "findings": [],
+                "attacks_by_type": {},
+                "leaked_data_types": [],
+                "vulnerabilities": [],
+                "results": [],
+                "available_exports": ["json", "markdown"],
+            }
+
+    monkeypatch.setattr(cli, "RunStorage", ArtifactStorage)
+    monkeypatch.setattr(sys, "argv", ["redteam", "--replay", "run-campaign"])
+
+    cli.main()
+
+    output = capsys.readouterr().out
+    assert "Campaign:" in output
+    assert "Strategy: fuzz" in output
+    assert "Categories: prompt_injection, data_exfiltration" in output
+    assert "Seed: 7" in output
+    assert "Attack Budget: 12" in output
 
 
 def test_cli_compare_renders_two_run_ids(monkeypatch, capsys, tmp_path):
@@ -300,6 +383,95 @@ def test_cli_compare_renders_two_run_ids(monkeypatch, capsys, tmp_path):
     assert run_a in output
     assert run_b in output
     assert "Leaked Data Differences" in output
+
+
+def test_cli_auto_accepts_attack_campaign_flags(monkeypatch):
+    class SpyStorage:
+        last_instance = None
+
+        def __init__(self):
+            self.closed = False
+            self.created = None
+            SpyStorage.last_instance = self
+
+        def init_db(self):
+            return None
+
+        def create_run(self, **kwargs):
+            self.created = kwargs
+            return "run-campaign"
+
+        def close(self):
+            self.closed = True
+
+    class SpyOrchestrator:
+        def __init__(self, storage, run_id=None):
+            self.storage = storage
+            self.run_id = run_id
+
+        def run_attack_suite(self, _target):
+            return {
+                "summary": {
+                    "total_attacks": 0,
+                    "successful_attacks": 0,
+                    "success_rate": 0.0,
+                    "duration": 0.0,
+                }
+            }
+
+    def fake_resolve(spec):
+        return spec, SimpleNamespace(
+            process_message=lambda _payload: {"message": "ok"},
+            get_system_info=lambda: {"llm_provider": "openai", "model_name": "gpt-4.1"},
+        )
+
+    monkeypatch.setattr(cli, "RunStorage", SpyStorage)
+    monkeypatch.setattr(cli, "RedTeamOrchestrator", SpyOrchestrator)
+    monkeypatch.setattr(cli, "resolve_target_spec", fake_resolve)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "redteam",
+            "--auto",
+            "--target-type",
+            "hosted_chat_model",
+            "--target-provider",
+            "openai",
+            "--target-model",
+            "gpt-4.1",
+            "--target-config",
+            json.dumps(
+                {
+                    "system_prompt": "audit me",
+                    "capabilities": {"tool_use": True},
+                    "constraints": ["no-pii"],
+                }
+            ),
+            "--attack-categories",
+            "prompt_injection,jailbreak",
+            "--attack-strategy",
+            "fuzz",
+            "--attack-budget",
+            "12",
+            "--seed",
+            "7",
+        ],
+    )
+
+    cli.main()
+
+    assert SpyStorage.last_instance.closed is True
+    assert SpyStorage.last_instance.created["target_type"] == "hosted_chat_model"
+    assert SpyStorage.last_instance.created["target_provider"] == "openai"
+    assert SpyStorage.last_instance.created["target_model"] == "gpt-4.1"
+    assert SpyStorage.last_instance.created["target_config"]["campaign"] == {
+        "attack_categories": ["prompt_injection", "jailbreak"],
+        "attack_strategy": "fuzz",
+        "attack_budget": 12,
+        "seed": 7,
+    }
+    assert SpyStorage.last_instance.created["target_config"]["capabilities"]["tool_use"] is True
 
 
 def test_cli_auto_closes_storage_on_failure(monkeypatch):
@@ -345,74 +517,3 @@ def test_cli_auto_closes_storage_on_failure(monkeypatch):
 
     assert SpyStorage.last_instance.closed is True
     assert SpyStorage.last_instance.created["target_type"] == "vulnerable_llm_app"
-
-
-def test_cli_auto_accepts_hosted_target_flags(monkeypatch):
-    class SpyStorage:
-        last_instance = None
-
-        def __init__(self):
-            self.closed = False
-            self.created = None
-            SpyStorage.last_instance = self
-
-        def init_db(self):
-            return None
-
-        def create_run(self, **kwargs):
-            self.created = kwargs
-            return "run-hosted"
-
-        def close(self):
-            self.closed = True
-
-    class SpyOrchestrator:
-        last_target = None
-
-        def __init__(self, storage, run_id=None):
-            self.storage = storage
-            self.run_id = run_id
-
-        def run_attack_suite(self, target):
-            SpyOrchestrator.last_target = target
-            return {"summary": {"total_attacks": 0, "successful_attacks": 0, "success_rate": 0.0}}
-
-    def fake_resolve(spec):
-        return spec, SimpleNamespace(
-            process_message=lambda _payload: {"message": "ok"},
-            get_system_info=lambda: {"llm_provider": "openai", "model_name": "gpt-4.1"},
-        )
-
-    monkeypatch.setattr(cli, "RunStorage", SpyStorage)
-    monkeypatch.setattr(cli, "RedTeamOrchestrator", SpyOrchestrator)
-    monkeypatch.setattr(cli, "resolve_target_spec", fake_resolve)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "redteam",
-            "--auto",
-            "--target-type",
-            "hosted_chat_model",
-            "--target-provider",
-            "openai",
-            "--target-model",
-            "gpt-4.1",
-            "--target-config",
-            json.dumps(
-                {
-                    "system_prompt": "audit me",
-                    "capabilities": {"tool_use": True},
-                    "constraints": ["no-pii"],
-                }
-            ),
-        ],
-    )
-
-    cli.main()
-
-    assert SpyStorage.last_instance.closed is True
-    assert SpyStorage.last_instance.created["target_type"] == "hosted_chat_model"
-    assert SpyStorage.last_instance.created["target_provider"] == "openai"
-    assert SpyStorage.last_instance.created["target_model"] == "gpt-4.1"
-    assert SpyStorage.last_instance.created["target_config"]["capabilities"]["tool_use"] is True
