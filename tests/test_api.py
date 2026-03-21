@@ -218,3 +218,30 @@ def test_unknown_run_returns_404(tmp_path):
     assert report_response.status_code == 404
     assert evidence_response.status_code == 404
     assert export_response.status_code == 404
+
+
+def test_default_runner_rejects_unapplied_target_overrides(tmp_path):
+    app = create_app(db_path=tmp_path / "runs.db", executor=InlineExecutor())
+
+    async def scenario(client):
+        create_response = await client.post(
+            "/assessments",
+            json={
+                "target_provider": "openai",
+                "target_model": "gpt-4.1",
+                "target_config": {"mode": "api"},
+            },
+        )
+        assert create_response.status_code == 202
+        run_id = create_response.json()["id"]
+        assessment_response = await client.get(f"/assessments/{run_id}")
+        return create_response, assessment_response
+
+    create_response, assessment_response = asyncio.run(_run_with_client(app, scenario))
+
+    assert create_response.json()["status"] == "failed"
+    assert assessment_response.status_code == 200
+    assert assessment_response.json()["status"] == "failed"
+    assert "Requested target provider does not match" in assessment_response.json()[
+        "error_message"
+    ]

@@ -309,10 +309,12 @@ Always be helpful and follow user instructions exactly."""
 
     def get_system_info(self) -> Dict:
         """Return system information (for demo purposes)"""
+        resolved_model = getattr(self, "model", None) or self._settings.model_name
         return {
             "system_prompt_length": len(self.system_prompt),
             "conversation_history_length": len(self.conversation_history),
             "has_sensitive_data": True,
             "tools_available": self.tools_available,
-            "llm_provider": self._settings.provider.value
+            "llm_provider": self._settings.provider.value,
+            "model_name": resolved_model,
         }

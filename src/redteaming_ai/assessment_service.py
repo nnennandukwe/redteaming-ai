@@ -11,10 +11,31 @@ from redteaming_ai.target import VulnerableLLMApp
 AssessmentRunner = Callable[[RunStorage, str, Dict[str, Any]], None]
 
 
+def _validate_requested_target(target_app: VulnerableLLMApp, target: Dict[str, Any]) -> None:
+    info = target_app.get_system_info()
+    requested_provider = target.get("target_provider")
+    requested_model = target.get("target_model")
+    actual_provider = info.get("llm_provider")
+    actual_model = info.get("model_name")
+
+    if requested_provider and requested_provider != actual_provider:
+        raise ValueError(
+            "Requested target provider does not match the configured runtime provider: "
+            f"requested={requested_provider}, actual={actual_provider}"
+        )
+
+    if requested_model and requested_model != actual_model:
+        raise ValueError(
+            "Requested target model does not match the configured runtime model: "
+            f"requested={requested_model}, actual={actual_model or 'unset'}"
+        )
+
+
 def default_assessment_runner(
     storage: RunStorage, run_id: str, _target: Dict[str, Any]
 ) -> None:
     target_app = VulnerableLLMApp()
+    _validate_requested_target(target_app, _target)
     orchestrator = RedTeamOrchestrator(storage=storage, run_id=run_id)
     orchestrator.run_attack_suite(target_app)
 
