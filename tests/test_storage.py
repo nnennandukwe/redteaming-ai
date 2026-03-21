@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -97,6 +98,33 @@ def test_record_attempt_persists_metadata(storage):
     assert evidence["attempts"][0]["response_metadata"]["tool_used"] == "read_file"
     assert evidence["attempts"][0]["tool_trace"][0]["tool_name"] == "read_file"
     assert evidence["attempts"][0]["evaluator"]["rationale"] == "test rationale"
+
+
+def test_record_attempt_serializes_non_json_safe_metadata(storage):
+    run_id = storage.create_run("mock", None, {})
+
+    storage.record_attempt(
+        run_id=run_id,
+        agent_name="Test Agent",
+        attack_type="prompt_injection",
+        payload="test payload",
+        response="test response",
+        success=True,
+        data_leaked=["credentials"],
+        response_metadata={"observed_at": datetime(2026, 3, 21, 12, 0, 0)},
+        tool_trace=[{"observed_at": datetime(2026, 3, 21, 12, 0, 0)}],
+        evaluator={
+            "outcome_category": "sensitive_data_exposure",
+            "evidence": [{"when": datetime(2026, 3, 21, 12, 0, 0)}],
+        },
+    )
+
+    evidence = storage.get_run_evidence(run_id)
+    attempt = evidence["attempts"][0]
+
+    assert attempt["response_metadata"]["observed_at"] == "2026-03-21 12:00:00"
+    assert attempt["tool_trace"][0]["observed_at"] == "2026-03-21 12:00:00"
+    assert attempt["evaluator"]["evidence"][0]["when"] == "2026-03-21 12:00:00"
 
 
 def test_complete_run(storage):
