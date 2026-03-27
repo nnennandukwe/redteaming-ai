@@ -21,6 +21,7 @@ from redteaming_ai.api_models import (
 from redteaming_ai.assessment_service import AssessmentRunner, AssessmentService
 from redteaming_ai.observability import (
     REQUEST_ID_HEADER,
+    log_error,
     log_info,
     log_warning,
     request_id_context,
@@ -69,7 +70,22 @@ def create_app(
         request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
         request.state.request_id = request_id
         with request_id_context(request_id):
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                log_error(
+                    logger,
+                    "request_processing",
+                    "failed",
+                    method=request.method,
+                    path=request.url.path,
+                    error_type=type(exc).__name__,
+                    hint="Inspect application logs for the server-side failure.",
+                )
+                response = JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"detail": "Internal Server Error"},
+                )
         response.headers[REQUEST_ID_HEADER] = request_id
         return response
 

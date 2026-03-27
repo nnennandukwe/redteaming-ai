@@ -19,9 +19,19 @@ _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[A-Z0-9._~+/-]+=*")
 _HEADER_SECRET_PATTERN = re.compile(
     r"(?i)\b(authorization|cookie)\s*:\s*([^\s,;]+(?:\s+[^\s,;]+)*)"
 )
+_QUOTED_SECRET_PATTERN = re.compile(
+    r"""(?ix)
+    (["']?(?:authorization|cookie|token|secret|password|api[_-]?key)["']?\s*[:=]\s*)
+    (["'])
+    (?:\\.|(?!\2).)*
+    \2
+    """
+)
 _ASSIGNMENT_SECRET_PATTERN = re.compile(
     r"(?i)\b(token|secret|password|api[_-]?key)\b\s*[:=]\s*([^\s,;]+)"
 )
+_SAFE_LOC_PARTS = {"body", "query", "path", "header", "cookie"}
+_SAFE_LOC_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 _SENSITIVE_KEY_PARTS = (
     "authorization",
@@ -52,6 +62,7 @@ _SAFE_KEYS = {
     "target_type",
     "validation_errors",
 }
+_RAW_STRING_SAFE_KEYS = {"request_id", "run_id"}
 
 
 def normalize_request_id(value: Optional[str]) -> Optional[str]:
@@ -85,6 +96,10 @@ def request_id_context(request_id: Optional[str]) -> Iterator[Optional[str]]:
 def sanitize_text(value: Any) -> str:
     text = str(value)
     text = _HEADER_SECRET_PATTERN.sub(lambda match: f"{match.group(1)}: [redacted]", text)
+    text = _QUOTED_SECRET_PATTERN.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}[redacted]{match.group(2)}",
+        text,
+    )
     text = _ASSIGNMENT_SECRET_PATTERN.sub(lambda match: f"{match.group(1)}=[redacted]", text)
     text = _BEARER_PATTERN.sub("Bearer [redacted]", text)
     text = _EMAIL_PATTERN.sub("[redacted-email]", text)
@@ -97,7 +112,7 @@ def safe_validation_errors(errors: Iterable[Mapping[str, Any]]) -> list[Dict[str
     for error in errors:
         sanitized.append(
             {
-                "loc": [str(part) for part in error.get("loc", ())],
+                "loc": [_sanitize_loc_part(part) for part in error.get("loc", ())],
                 "type": sanitize_text(error.get("type", "validation_error")),
             }
         )
@@ -148,6 +163,8 @@ def _sanitize_field(key: str, value: Any) -> Any:
         return safe_validation_errors(value)
     if _is_sensitive_key(key) or key not in _SAFE_KEYS:
         return "[redacted]"
+    if key in _RAW_STRING_SAFE_KEYS:
+        return str(value)
     if isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, Mapping):
@@ -160,3 +177,17 @@ def _sanitize_field(key: str, value: Any) -> Any:
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.lower()
     return any(part in normalized for part in _SENSITIVE_KEY_PARTS)
+
+
+def _sanitize_loc_part(part: Any) -> Any:
+    if isinstance(part, int):
+        return part
+
+    text = sanitize_text(part)
+    if text in _SAFE_LOC_PARTS:
+        return text
+    if _is_sensitive_key(text):
+        return "[redacted]"
+    if _SAFE_LOC_IDENTIFIER_PATTERN.fullmatch(text):
+        return text
+    return "[redacted]"

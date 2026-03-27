@@ -10,6 +10,7 @@ import httpx
 import redteaming_ai.assessment_service as assessment_service_module
 from redteaming_ai.api import create_app
 from redteaming_ai.observability import REQUEST_ID_HEADER, get_request_id
+from redteaming_ai.storage import RunStorage
 
 
 class InlineExecutor:
@@ -127,12 +128,55 @@ def test_request_id_is_echoed_and_propagated_to_background_execution(tmp_path, c
         assert event["run_id"] == created["id"]
 
 
+def test_request_id_is_preserved_on_unhandled_500(tmp_path, caplog):
+    request_id = "req-500-123"
+
+    class BrokenRunStorage(RunStorage):
+        def create_run(self, *args, **kwargs):
+            raise RuntimeError("database unavailable")
+
+    app = create_app(
+        db_path=tmp_path / "runs.db",
+        executor=InlineExecutor(),
+        storage_cls=BrokenRunStorage,
+    )
+
+    async def scenario(client):
+        return await client.post(
+            "/assessments",
+            json={
+                "target_provider": "mock",
+                "target_model": "demo-model",
+                "target_config": {"mode": "api"},
+            },
+            headers={REQUEST_ID_HEADER: request_id},
+        )
+
+    with caplog.at_level(logging.ERROR, logger="redteaming_ai"):
+        response = asyncio.run(_run_with_client(app, scenario))
+
+    assert response.status_code == 500
+    assert response.headers[REQUEST_ID_HEADER] == request_id
+    assert response.json() == {"detail": "Internal Server Error"}
+
+    events = _structured_events(caplog)
+    failed = next(
+        event
+        for event in events
+        if event["operation"] == "request_processing" and event["outcome"] == "failed"
+    )
+    assert failed["request_id"] == request_id
+    assert failed["method"] == "POST"
+    assert failed["path"] == "/assessments"
+    assert failed["error_type"] == "RuntimeError"
+
+
 def test_failed_assessment_logs_preserve_request_id_without_leaking_secrets(
     tmp_path, caplog
 ):
     request_id = "req-failure-123"
     observed_request_ids = []
-    secret_value = "Authorization: Bearer super-secret-token"
+    secret_value = '{"api_key": "sk-live-super-secret", "token": "runner-secret"}'
 
     def failing_runner(storage, run_id, target):
         observed_request_ids.append(get_request_id())
@@ -164,7 +208,7 @@ def test_failed_assessment_logs_preserve_request_id_without_leaking_secrets(
 
     created = response.json()
     assert created["status"] == "failed"
-    assert created["error_message"] == "Authorization: [redacted]"
+    assert created["error_message"] == '{"api_key": "[redacted]", "token": "[redacted]"}'
 
     events = _structured_events(caplog)
     failed = next(
@@ -174,13 +218,15 @@ def test_failed_assessment_logs_preserve_request_id_without_leaking_secrets(
     )
     assert failed["request_id"] == request_id
     assert failed["run_id"] == created["id"]
-    assert failed["error_message"] == "Authorization: [redacted]"
-    assert "super-secret-token" not in caplog.text
+    assert failed["error_message"] == '{"api_key": "[redacted]", "token": "[redacted]"}'
+    assert "sk-live-super-secret" not in caplog.text
+    assert "runner-secret" not in caplog.text
 
 
 def test_validation_errors_log_safe_request_context(tmp_path, caplog):
     request_id = "req-validation-123"
     leaked_text = "alice@example.com 555-111-2222 Authorization: Bearer top-secret"
+    extra_field_name = "alice@example.com"
     app = create_app(db_path=tmp_path / "runs.db", executor=InlineExecutor())
 
     async def scenario(client):
@@ -191,7 +237,7 @@ def test_validation_errors_log_safe_request_context(tmp_path, caplog):
                 "target_model": "demo-model",
                 "target_config": {"mode": "api"},
                 "attack_strategy": "invalid",
-                "unexpected": leaked_text,
+                extra_field_name: leaked_text,
             },
             headers={REQUEST_ID_HEADER: request_id},
         )
@@ -212,6 +258,7 @@ def test_validation_errors_log_safe_request_context(tmp_path, caplog):
     assert invalid["method"] == "POST"
     assert invalid["path"] == "/assessments"
     assert invalid["validation_errors"]
+    assert any("[redacted]" in error["loc"] for error in invalid["validation_errors"])
     assert "alice@example.com" not in caplog.text
     assert "555-111-2222" not in caplog.text
     assert "top-secret" not in caplog.text
