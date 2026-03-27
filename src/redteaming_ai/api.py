@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import Executor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from redteaming_ai.api_models import (
@@ -16,7 +19,19 @@ from redteaming_ai.api_models import (
     ReportResponse,
 )
 from redteaming_ai.assessment_service import AssessmentRunner, AssessmentService
+from redteaming_ai.observability import (
+    REQUEST_ID_HEADER,
+    log_error,
+    log_info,
+    log_warning,
+    request_id_context,
+    resolve_request_id,
+    safe_validation_errors,
+    sanitize_text,
+)
 from redteaming_ai.storage import RunStorage
+
+logger = logging.getLogger("redteaming_ai.api")
 
 
 def get_assessment_service(request: Request) -> AssessmentService:
@@ -50,6 +65,43 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
+        request.state.request_id = request_id
+        with request_id_context(request_id):
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                log_error(
+                    logger,
+                    "request_processing",
+                    "failed",
+                    method=request.method,
+                    path=request.url.path,
+                    error_type=type(exc).__name__,
+                    hint="Inspect application logs for the server-side failure.",
+                )
+                response = JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"detail": "Internal Server Error"},
+                )
+        response.headers[REQUEST_ID_HEADER] = request_id
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_validation_error(request: Request, exc: RequestValidationError):
+        log_warning(
+            logger,
+            "request_validation",
+            "invalid",
+            method=request.method,
+            path=request.url.path,
+            validation_errors=safe_validation_errors(exc.errors()),
+            hint="Fix the request payload so it matches the API schema.",
+        )
+        return await request_validation_exception_handler(request, exc)
+
     @app.post(
         "/assessments",
         response_model=AssessmentResponse,
@@ -74,7 +126,23 @@ def create_app(
                 campaign_config=campaign_config,
             )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            log_warning(
+                logger,
+                "assessment_create",
+                "rejected",
+                error_type=type(exc).__name__,
+                target_type=payload.target_type,
+                hint="Check target configuration and required fields.",
+            )
+            raise HTTPException(status_code=400, detail=sanitize_text(str(exc))) from exc
+        log_info(
+            logger,
+            "assessment_create",
+            "accepted",
+            run_id=run["id"],
+            target_type=payload.target_type,
+            status=run["status"],
+        )
         return AssessmentResponse(**run)
 
     @app.get("/assessments/{run_id}", response_model=AssessmentResponse)
