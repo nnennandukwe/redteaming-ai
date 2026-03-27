@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import time
+import uuid
 from concurrent.futures import Executor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,6 +10,8 @@ from typing import Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from redteaming_ai.api_models import (
@@ -16,7 +21,15 @@ from redteaming_ai.api_models import (
     ReportResponse,
 )
 from redteaming_ai.assessment_service import AssessmentRunner, AssessmentService
+from redteaming_ai.service_logging import (
+    REQUEST_ID_HEADER,
+    log_event,
+    reset_request_id,
+    set_request_id,
+)
 from redteaming_ai.storage import RunStorage
+
+logger = logging.getLogger("redteaming_ai.api")
 
 
 def get_assessment_service(request: Request) -> AssessmentService:
@@ -50,12 +63,74 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def request_context_middleware(request: Request, call_next):
+        request_id = request.headers.get(REQUEST_ID_HEADER) or str(uuid.uuid4())
+        request.state.request_id = request_id
+        request.state.run_id = None
+        token = set_request_id(request_id)
+        started_at = time.perf_counter()
+        log_event(
+            logger,
+            logging.INFO,
+            "http_request_started",
+            method=request.method,
+            path=request.url.path,
+            request_id=request_id,
+        )
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "http_request_failed",
+                method=request.method,
+                path=request.url.path,
+                request_id=request_id,
+                status_code=500,
+                error_type=type(exc).__name__,
+            )
+            raise
+        finally:
+            reset_request_id(token)
+
+        response.headers[REQUEST_ID_HEADER] = request_id
+        log_event(
+            logger,
+            logging.INFO,
+            "http_request_completed",
+            method=request.method,
+            path=request.url.path,
+            request_id=request_id,
+            run_id=request.state.run_id,
+            status_code=response.status_code,
+            duration_ms=round((time.perf_counter() - started_at) * 1000, 3),
+        )
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_request_validation_error(
+        request: Request, exc: RequestValidationError
+    ):
+        log_event(
+            logger,
+            logging.WARNING,
+            "request_validation_failed",
+            method=request.method,
+            path=request.url.path,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            error_type=type(exc).__name__,
+        )
+        return await request_validation_exception_handler(request, exc)
+
     @app.post(
         "/assessments",
         response_model=AssessmentResponse,
         status_code=status.HTTP_202_ACCEPTED,
     )
     def create_assessment(
+        request: Request,
         payload: AssessmentCreateRequest,
         service: AssessmentService = Depends(get_assessment_service),
     ) -> AssessmentResponse:
@@ -74,7 +149,20 @@ def create_app(
                 campaign_config=campaign_config,
             )
         except ValueError as exc:
+            log_event(
+                logger,
+                logging.WARNING,
+                "assessment_request_rejected",
+                method=request.method,
+                path=request.url.path,
+                status_code=status.HTTP_400_BAD_REQUEST,
+                target_type=payload.target_type,
+                target_provider=payload.target_provider,
+                target_model=payload.target_model,
+                error_type=type(exc).__name__,
+            )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        request.state.run_id = run["id"]
         return AssessmentResponse(**run)
 
     @app.get("/assessments/{run_id}", response_model=AssessmentResponse)
