@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Type
 
 from redteaming_ai.adapters import normalize_target_spec, resolve_target_spec
 from redteaming_ai.agents import RedTeamOrchestrator
+from redteaming_ai.service_logging import (
+    get_request_id,
+    log_event,
+    reset_request_id,
+    set_request_id,
+)
 from redteaming_ai.storage import RunStorage
 
 AssessmentRunner = Callable[[RunStorage, str, Dict[str, Any]], None]
+logger = logging.getLogger("redteaming_ai.api")
 
 
 def default_assessment_runner(
@@ -85,7 +93,19 @@ class AssessmentService:
 
         runner_target = spec.to_dict()
         runner_target["campaign_config"] = campaign_config
-        self.executor.submit(self._execute_assessment, run_id, runner_target)
+        request_id = get_request_id()
+        log_event(
+            logger,
+            logging.INFO,
+            "assessment_queued",
+            request_id=request_id,
+            run_id=run_id,
+            status="running",
+            target_type=spec.target_type,
+            target_provider=spec.target_provider,
+            target_model=spec.target_model,
+        )
+        self.executor.submit(self._execute_assessment, run_id, runner_target, request_id)
         run = self.get_assessment(run_id)
         if not run:
             raise ValueError(f"Run {run_id} was not created")
@@ -144,13 +164,50 @@ class AssessmentService:
         finally:
             storage.close()
 
-    def _execute_assessment(self, run_id: str, target: Dict[str, Any]) -> None:
+    def _execute_assessment(
+        self, run_id: str, target: Dict[str, Any], request_id: Optional[str] = None
+    ) -> None:
         storage = self._open_storage()
+        token = set_request_id(request_id)
         try:
+            log_event(
+                logger,
+                logging.INFO,
+                "assessment_execution_started",
+                run_id=run_id,
+                status="running",
+                target_type=target.get("target_type"),
+                target_provider=target.get("target_provider"),
+                target_model=target.get("target_model"),
+            )
             self.assessment_runner(storage, run_id, target)
+            run = storage.get_run(run_id)
+            log_event(
+                logger,
+                logging.INFO,
+                "assessment_execution_completed",
+                run_id=run_id,
+                status="completed",
+                target_type=target.get("target_type"),
+                target_provider=target.get("target_provider"),
+                target_model=target.get("target_model"),
+                duration_seconds=run.get("duration_seconds") if run else None,
+            )
         except Exception as exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "assessment_execution_failed",
+                run_id=run_id,
+                status="failed",
+                target_type=target.get("target_type"),
+                target_provider=target.get("target_provider"),
+                target_model=target.get("target_model"),
+                error_type=type(exc).__name__,
+            )
             storage.mark_run_failed(run_id, str(exc))
         finally:
+            reset_request_id(token)
             storage.close()
 
     def _build_assessment_response(self, run: Dict[str, Any]) -> Dict[str, Any]:
