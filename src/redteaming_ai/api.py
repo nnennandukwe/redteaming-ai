@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import Executor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Optional
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from redteaming_ai.api_logging import (
+    REQUEST_ID_HEADER,
+    log_event,
+    normalize_request_id,
+    request_logging_context,
+)
 from redteaming_ai.api_models import (
     AssessmentCreateRequest,
     AssessmentResponse,
@@ -50,12 +58,63 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def request_context_middleware(request: Request, call_next):
+        request_id = normalize_request_id(request.headers.get(REQUEST_ID_HEADER))
+        request.state.request_id = request_id
+        started_at = perf_counter()
+
+        with request_logging_context(request_id):
+            log_event(
+                "http.request_started",
+                operation="http_request",
+                outcome="started",
+                method=request.method,
+                path=request.url.path,
+            )
+            try:
+                response = await call_next(request)
+            except Exception:
+                log_event(
+                    "http.request_failed",
+                    level=logging.ERROR,
+                    operation="http_request",
+                    outcome="failure",
+                    method=request.method,
+                    path=request.url.path,
+                    remediation="Inspect the application traceback for the failed request.",
+                )
+                raise
+
+            response.headers[REQUEST_ID_HEADER] = request_id
+            log_event(
+                "http.request_completed",
+                level=(
+                    logging.WARNING
+                    if response.status_code >= status.HTTP_400_BAD_REQUEST
+                    else logging.INFO
+                ),
+                operation="http_request",
+                outcome=(
+                    "failure"
+                    if response.status_code >= status.HTTP_400_BAD_REQUEST
+                    else "success"
+                ),
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=int((perf_counter() - started_at) * 1000),
+                run_id=getattr(request.state, "run_id", None),
+            )
+            return response
+
     @app.post(
         "/assessments",
         response_model=AssessmentResponse,
         status_code=status.HTTP_202_ACCEPTED,
     )
     def create_assessment(
+        request: Request,
         payload: AssessmentCreateRequest,
         service: AssessmentService = Depends(get_assessment_service),
     ) -> AssessmentResponse:
@@ -72,16 +131,20 @@ def create_app(
                 target_model=payload.target_model,
                 target_config=payload.target_config,
                 campaign_config=campaign_config,
+                request_id=request.state.request_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        request.state.run_id = run["id"]
         return AssessmentResponse(**run)
 
     @app.get("/assessments/{run_id}", response_model=AssessmentResponse)
     def get_assessment(
+        request: Request,
         run_id: str,
         service: AssessmentService = Depends(get_assessment_service),
     ) -> AssessmentResponse:
+        request.state.run_id = run_id
         run = service.get_assessment(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Assessment not found")
@@ -89,9 +152,11 @@ def create_app(
 
     @app.get("/assessments/{run_id}/report", response_model=ReportResponse)
     def get_report(
+        request: Request,
         run_id: str,
         service: AssessmentService = Depends(get_assessment_service),
     ) -> ReportResponse:
+        request.state.run_id = run_id
         run = service.get_assessment(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Assessment not found")
@@ -107,9 +172,11 @@ def create_app(
 
     @app.get("/assessments/{run_id}/evidence", response_model=EvidenceResponse)
     def get_evidence(
+        request: Request,
         run_id: str,
         service: AssessmentService = Depends(get_assessment_service),
     ) -> EvidenceResponse:
+        request.state.run_id = run_id
         evidence = service.get_evidence(run_id)
         if not evidence:
             raise HTTPException(status_code=404, detail="Assessment not found")
@@ -117,10 +184,12 @@ def create_app(
 
     @app.get("/assessments/{run_id}/report/export")
     def export_report(
+        request: Request,
         run_id: str,
         format: str = Query("json", pattern="^(json|markdown)$"),
         service: AssessmentService = Depends(get_assessment_service),
     ):
+        request.state.run_id = run_id
         run = service.get_assessment(run_id)
         if not run:
             raise HTTPException(status_code=404, detail="Assessment not found")
