@@ -1,4 +1,6 @@
 import asyncio
+import json
+import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -7,6 +9,7 @@ import httpx
 
 import redteaming_ai.assessment_service as assessment_service_module
 from redteaming_ai.api import create_app
+from redteaming_ai.observability import REQUEST_ID_HEADER, get_request_id
 
 
 class InlineExecutor:
@@ -41,6 +44,177 @@ async def _create_assessment(client, payload=None):
     response = await client.post("/assessments", json=request)
     assert response.status_code == 202
     return response.json()
+
+
+def _structured_events(caplog):
+    events = []
+    for record in caplog.records:
+        if not record.name.startswith("redteaming_ai"):
+            continue
+        try:
+            events.append(json.loads(record.getMessage()))
+        except json.JSONDecodeError:
+            continue
+    return events
+
+
+def test_request_id_is_echoed_and_propagated_to_background_execution(tmp_path, caplog):
+    request_id = "req-success-123"
+    observed_request_ids = []
+
+    def scripted_runner(storage, run_id, target):
+        observed_request_ids.append(get_request_id())
+        storage.complete_run(run_id, 0.05)
+        storage.save_report(
+            run_id,
+            summary={
+                "total_attacks": 0,
+                "successful_attacks": 0,
+                "success_rate": 0.0,
+                "duration": 0.05,
+            },
+            vulnerabilities=[],
+            leaked_data_types=[],
+        )
+
+    app = create_app(
+        db_path=tmp_path / "runs.db",
+        executor=InlineExecutor(),
+        assessment_runner=scripted_runner,
+    )
+
+    async def scenario(client):
+        return await client.post(
+            "/assessments",
+            json={
+                "target_provider": "mock",
+                "target_model": "demo-model",
+                "target_config": {"mode": "api"},
+            },
+            headers={REQUEST_ID_HEADER: request_id},
+        )
+
+    with caplog.at_level(logging.INFO, logger="redteaming_ai"):
+        response = asyncio.run(_run_with_client(app, scenario))
+
+    assert response.status_code == 202
+    assert response.headers[REQUEST_ID_HEADER] == request_id
+    assert observed_request_ids == [request_id]
+
+    created = response.json()
+    assert created["status"] == "completed"
+
+    events = _structured_events(caplog)
+    accepted = next(
+        event
+        for event in events
+        if event["operation"] == "assessment_create" and event["outcome"] == "accepted"
+    )
+    started = next(
+        event
+        for event in events
+        if event["operation"] == "assessment_execution" and event["outcome"] == "started"
+    )
+    completed = next(
+        event
+        for event in events
+        if event["operation"] == "assessment_execution"
+        and event["outcome"] == "completed"
+    )
+
+    for event in (accepted, started, completed):
+        assert event["request_id"] == request_id
+        assert event["run_id"] == created["id"]
+
+
+def test_failed_assessment_logs_preserve_request_id_without_leaking_secrets(
+    tmp_path, caplog
+):
+    request_id = "req-failure-123"
+    observed_request_ids = []
+    secret_value = "Authorization: Bearer super-secret-token"
+
+    def failing_runner(storage, run_id, target):
+        observed_request_ids.append(get_request_id())
+        raise RuntimeError(secret_value)
+
+    app = create_app(
+        db_path=tmp_path / "runs.db",
+        executor=InlineExecutor(),
+        assessment_runner=failing_runner,
+    )
+
+    async def scenario(client):
+        return await client.post(
+            "/assessments",
+            json={
+                "target_provider": "mock",
+                "target_model": "demo-model",
+                "target_config": {"mode": "api"},
+            },
+            headers={REQUEST_ID_HEADER: request_id},
+        )
+
+    with caplog.at_level(logging.INFO, logger="redteaming_ai"):
+        response = asyncio.run(_run_with_client(app, scenario))
+
+    assert response.status_code == 202
+    assert response.headers[REQUEST_ID_HEADER] == request_id
+    assert observed_request_ids == [request_id]
+
+    created = response.json()
+    assert created["status"] == "failed"
+    assert created["error_message"] == "Authorization: [redacted]"
+
+    events = _structured_events(caplog)
+    failed = next(
+        event
+        for event in events
+        if event["operation"] == "assessment_execution" and event["outcome"] == "failed"
+    )
+    assert failed["request_id"] == request_id
+    assert failed["run_id"] == created["id"]
+    assert failed["error_message"] == "Authorization: [redacted]"
+    assert "super-secret-token" not in caplog.text
+
+
+def test_validation_errors_log_safe_request_context(tmp_path, caplog):
+    request_id = "req-validation-123"
+    leaked_text = "alice@example.com 555-111-2222 Authorization: Bearer top-secret"
+    app = create_app(db_path=tmp_path / "runs.db", executor=InlineExecutor())
+
+    async def scenario(client):
+        return await client.post(
+            "/assessments",
+            json={
+                "target_provider": "mock",
+                "target_model": "demo-model",
+                "target_config": {"mode": "api"},
+                "attack_strategy": "invalid",
+                "unexpected": leaked_text,
+            },
+            headers={REQUEST_ID_HEADER: request_id},
+        )
+
+    with caplog.at_level(logging.WARNING, logger="redteaming_ai"):
+        response = asyncio.run(_run_with_client(app, scenario))
+
+    assert response.status_code == 422
+    assert response.headers[REQUEST_ID_HEADER] == request_id
+
+    events = _structured_events(caplog)
+    invalid = next(
+        event
+        for event in events
+        if event["operation"] == "request_validation" and event["outcome"] == "invalid"
+    )
+    assert invalid["request_id"] == request_id
+    assert invalid["method"] == "POST"
+    assert invalid["path"] == "/assessments"
+    assert invalid["validation_errors"]
+    assert "alice@example.com" not in caplog.text
+    assert "555-111-2222" not in caplog.text
+    assert "top-secret" not in caplog.text
 
 
 def test_assessment_endpoints_return_report_evidence_and_export(tmp_path):

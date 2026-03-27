@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import logging
 from concurrent.futures import Executor, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Type
 
 from redteaming_ai.adapters import normalize_target_spec, resolve_target_spec
 from redteaming_ai.agents import RedTeamOrchestrator
+from redteaming_ai.observability import (
+    get_request_id,
+    log_error,
+    log_info,
+    request_id_context,
+    sanitize_text,
+)
 from redteaming_ai.storage import RunStorage
 
 AssessmentRunner = Callable[[RunStorage, str, Dict[str, Any]], None]
+logger = logging.getLogger("redteaming_ai.assessment_service")
 
 
 def default_assessment_runner(
@@ -85,7 +94,12 @@ class AssessmentService:
 
         runner_target = spec.to_dict()
         runner_target["campaign_config"] = campaign_config
-        self.executor.submit(self._execute_assessment, run_id, runner_target)
+        self.executor.submit(
+            self._execute_assessment,
+            run_id,
+            runner_target,
+            get_request_id(),
+        )
         run = self.get_assessment(run_id)
         if not run:
             raise ValueError(f"Run {run_id} was not created")
@@ -144,14 +158,43 @@ class AssessmentService:
         finally:
             storage.close()
 
-    def _execute_assessment(self, run_id: str, target: Dict[str, Any]) -> None:
-        storage = self._open_storage()
-        try:
-            self.assessment_runner(storage, run_id, target)
-        except Exception as exc:
-            storage.mark_run_failed(run_id, str(exc))
-        finally:
-            storage.close()
+    def _execute_assessment(
+        self, run_id: str, target: Dict[str, Any], request_id: Optional[str] = None
+    ) -> None:
+        with request_id_context(request_id):
+            storage = self._open_storage()
+            log_info(
+                logger,
+                "assessment_execution",
+                "started",
+                run_id=run_id,
+                target_type=target.get("target_type"),
+            )
+            try:
+                self.assessment_runner(storage, run_id, target)
+            except Exception as exc:
+                safe_error_message = sanitize_text(str(exc))
+                storage.mark_run_failed(run_id, safe_error_message)
+                log_error(
+                    logger,
+                    "assessment_execution",
+                    "failed",
+                    run_id=run_id,
+                    target_type=target.get("target_type"),
+                    error_type=type(exc).__name__,
+                    error_message=safe_error_message,
+                    hint="Inspect the stored run error_message for sanitized failure details.",
+                )
+            else:
+                log_info(
+                    logger,
+                    "assessment_execution",
+                    "completed",
+                    run_id=run_id,
+                    target_type=target.get("target_type"),
+                )
+            finally:
+                storage.close()
 
     def _build_assessment_response(self, run: Dict[str, Any]) -> Dict[str, Any]:
         summary = None
